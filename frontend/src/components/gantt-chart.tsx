@@ -122,8 +122,8 @@ const LIST_MAX = 520
 /** Reserved width for the library vertical scrollbar when content overflows. */
 const V_SCROLL_W = 12
 const LIST_DEFAULT: Record<ChartScale, number> = {
-  day: 220,
-  week: 310,
+  day: 380,
+  week: 410,
   month: 370,
 }
 
@@ -179,12 +179,11 @@ function formatMonthLabel(date: Date): string {
 }
 
 function buildListLayout(
-  scale: ChartScale,
   totalWidth: number,
   showAssignee: boolean,
   showDatesPref: boolean,
 ): ListLayout {
-  const showDates = showDatesPref && scale !== "day"
+  const showDates = showDatesPref
   const showAssigneeEff = showAssignee
   if (totalWidth <= 0) {
     return {
@@ -280,6 +279,23 @@ function withDisplayOrder(tasks: GanttTask[]): GanttTask[] {
   }))
 }
 
+/** Hide library bar selection when our modal selection is cleared. */
+function withoutSelectedBarStyles(tasks: GanttTask[]): GanttTask[] {
+  return tasks.map((task) => {
+    const backgroundColor = task.styles?.backgroundColor
+    const progressColor = task.styles?.progressColor ?? backgroundColor
+    if (!backgroundColor) return task
+    return {
+      ...task,
+      styles: {
+        ...task.styles,
+        backgroundSelectedColor: backgroundColor,
+        progressSelectedColor: progressColor,
+      },
+    }
+  })
+}
+
 function dayColumnRules(columnWidth: number): CSSProperties {
   return {
     backgroundImage: `repeating-linear-gradient(
@@ -363,11 +379,12 @@ function lockTimelinePad(timeline: HTMLElement | null, padPx: number) {
 }
 
 function AssigneeAvatar({ name }: { name: string | null | undefined }) {
+  const tip = name?.trim() || "Без исполнителя"
   if (!name?.trim()) {
     return (
       <span
+        data-gantt-assignee-tip={tip}
         className="inline-flex size-7 shrink-0 cursor-default select-none items-center justify-center rounded-full bg-muted text-[10px] font-medium text-muted-foreground"
-        title="Без исполнителя"
       >
         —
       </span>
@@ -375,8 +392,8 @@ function AssigneeAvatar({ name }: { name: string | null | undefined }) {
   }
   return (
     <span
+      data-gantt-assignee-tip={tip}
       className="inline-flex size-7 shrink-0 cursor-default select-none items-center justify-center rounded-full bg-muted text-[10px] font-medium tracking-tight text-foreground"
-      title={name}
     >
       {formatAssigneeInitials(name)}
     </span>
@@ -505,8 +522,10 @@ export function GanttChart({
   } | null>(null)
 
   const shellRef = useRef<HTMLDivElement>(null)
+  const columnsMenuRef = useRef<HTMLDivElement>(null)
   const resizeDrag = useRef<{ startX: number; startWidth: number } | null>(null)
   const setSelectedTaskId = useUiStore((state) => state.setSelectedTaskId)
+  const selectedTaskId = useUiStore((state) => state.selectedTaskId)
   const [hoverTip, setHoverTip] = useState<HoverTip | null>(null)
 
   /** Only month may H-scroll when chat compresses; day/week always fit-resize. */
@@ -515,12 +534,11 @@ export function GanttChart({
   const listLayout = useMemo(
     () =>
       buildListLayout(
-        scale,
         listCollapsed ? 0 : listWidth,
         showAssigneeCol,
         showDatesCol,
       ),
-    [scale, listWidth, listCollapsed, showAssigneeCol, showDatesCol],
+    [listWidth, listCollapsed, showAssigneeCol, showDatesCol],
   )
 
   const listWidthForShell = listCollapsed ? 0 : listLayout.total
@@ -565,9 +583,9 @@ export function GanttChart({
 
   const listMinWidth = useMemo(() => {
     const assignee = showAssigneeCol ? ASSIGNEE_COL : 0
-    const dates = showDatesCol && scale !== "day" ? DATES_COL : 0
+    const dates = showDatesCol ? DATES_COL : 0
     return Math.max(LIST_MIN, 96 + assignee + dates)
-  }, [showAssigneeCol, showDatesCol, scale])
+  }, [showAssigneeCol, showDatesCol])
 
   const onResizePointerDown = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -796,6 +814,17 @@ export function GanttChart({
       return addMonths(prev, direction)
     })
   }
+
+  useEffect(() => {
+    if (!columnsMenuOpen) return
+    const onPointerDown = (event: PointerEvent) => {
+      const root = columnsMenuRef.current
+      if (!root || !(event.target instanceof Node)) return
+      if (!root.contains(event.target)) setColumnsMenuOpen(false)
+    }
+    document.addEventListener("pointerdown", onPointerDown)
+    return () => document.removeEventListener("pointerdown", onPointerDown)
+  }, [columnsMenuOpen])
 
   // Recompute metrics and settle the upcoming frame (hidden until ready).
   useLayoutEffect(() => {
@@ -1078,6 +1107,19 @@ export function GanttChart({
 
     const dismiss = () => setHoverTip(null)
 
+    const tipFromAssignee = (
+      el: Element,
+      clientX: number,
+      clientY: number,
+    ) => {
+      const name = el.getAttribute("data-gantt-assignee-tip")?.trim()
+      if (!name) {
+        dismiss()
+        return
+      }
+      setHoverTip({ clientX, clientY, title: name, lines: [] })
+    }
+
     const tipFromBar = (bar: Element, clientX: number, clientY: number) => {
       const label = bar.parentElement?.querySelector("text")?.textContent?.trim()
       if (!label) {
@@ -1099,6 +1141,20 @@ export function GanttChart({
       setHoverTip({ clientX, clientY, title: label, lines })
     }
 
+    const tipFromPoint = (target: Element, clientX: number, clientY: number) => {
+      const assignee = target.closest("[data-gantt-assignee-tip]")
+      if (assignee && shell.contains(assignee)) {
+        tipFromAssignee(assignee, clientX, clientY)
+        return
+      }
+      const bar = target.closest("._KxSXS")
+      if (bar && shell.contains(bar)) {
+        tipFromBar(bar, clientX, clientY)
+        return
+      }
+      dismiss()
+    }
+
     const onPointerMove = (event: PointerEvent) => {
       pointer.x = event.clientX
       pointer.y = event.clientY
@@ -1108,12 +1164,7 @@ export function GanttChart({
         dismiss()
         return
       }
-      const bar = target.closest("._KxSXS")
-      if (!bar) {
-        dismiss()
-        return
-      }
-      tipFromBar(bar, event.clientX, event.clientY)
+      tipFromPoint(target, event.clientX, event.clientY)
     }
 
     const refreshAfterScroll = () => {
@@ -1124,12 +1175,7 @@ export function GanttChart({
           dismiss()
           return
         }
-        const bar = el.closest("._KxSXS")
-        if (!bar || !shell.contains(bar)) {
-          dismiss()
-          return
-        }
-        tipFromBar(bar, pointer.x, pointer.y)
+        tipFromPoint(el, pointer.x, pointer.y)
       })
     }
 
@@ -1185,7 +1231,13 @@ export function GanttChart({
       viewStart: Date
     },
     opts: { pending?: boolean; visible: boolean },
-  ) => (
+  ) => {
+    const ganttTasks =
+      selectedTaskId === null
+        ? withoutSelectedBarStyles(frame.tasks)
+        : frame.tasks
+
+    return (
     <div
       data-gantt-pending={opts.pending ? "true" : undefined}
       className={cn(
@@ -1216,7 +1268,7 @@ export function GanttChart({
           />
           <Gantt
             key={frame.chartKey}
-            tasks={frame.tasks}
+            tasks={ganttTasks}
             viewMode={ViewMode.Day}
             viewDate={frame.viewStart}
             locale="ru"
@@ -1242,7 +1294,8 @@ export function GanttChart({
         </>
       )}
     </div>
-  )
+    )
+  }
 
   const pendingFrame = {
     chartKey,
@@ -1279,7 +1332,7 @@ export function GanttChart({
           >
             {listCollapsed ? <PanelLeftOpen /> : <PanelLeftClose />}
           </Button>
-          <div className="relative">
+          <div ref={columnsMenuRef} className="relative">
             <Button
               type="button"
               size="sm"
@@ -1300,24 +1353,13 @@ export function GanttChart({
                   />
                   Исполнители
                 </label>
-                <label
-                  className={cn(
-                    "flex items-center gap-2 rounded px-2 py-1.5",
-                    scale === "day"
-                      ? "cursor-not-allowed opacity-50"
-                      : "cursor-pointer hover:bg-muted",
-                  )}
-                >
+                <label className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 hover:bg-muted">
                   <input
                     type="checkbox"
-                    checked={showDatesCol && scale !== "day"}
-                    disabled={scale === "day"}
+                    checked={showDatesCol}
                     onChange={(e) => setShowDatesCol(e.target.checked)}
                   />
                   Сроки
-                  {scale === "day" ? (
-                    <span className="text-xs text-muted-foreground">(день)</span>
-                  ) : null}
                 </label>
               </div>
             ) : null}
