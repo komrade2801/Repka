@@ -9,6 +9,9 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react"
 import {
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
   ChevronLeft,
   ChevronRight,
   Columns3,
@@ -20,6 +23,7 @@ import { Gantt, ViewMode, type Task as GanttTask } from "gantt-task-react"
 import "gantt-task-react/dist/index.css"
 
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import {
   addDays,
   addMonths,
@@ -33,9 +37,13 @@ import {
   startOfMonth,
   startOfWeekMonday,
 } from "@/lib/date"
-import { toGanttTasks } from "@/lib/gantt-mapper"
+import { toGanttTasks, PRIORITY_COLORS } from "@/lib/gantt-mapper"
 import { useUiStore } from "@/stores/ui-store"
-import type { Task } from "@/types/task"
+import {
+  DEFAULT_TASK_PRIORITY,
+  type Task,
+  type TaskPriority,
+} from "@/types/task"
 import { cn } from "@/lib/utils"
 
 type GanttChartProps = {
@@ -49,6 +57,8 @@ type GanttChartProps = {
 }
 
 type ChartScale = "day" | "week" | "month"
+type SortKey = "title" | "assignee" | "priority" | "dates"
+type SortDir = "asc" | "desc"
 
 type HoverTip = {
   clientX: number
@@ -99,9 +109,13 @@ function EmptyGanttTooltip() {
 type ListLayout = {
   title: number
   assignee: number
+  priority: number
   dates: number
   total: number
   showAssignee: boolean
+  showPriority: boolean
+  /** Dot-only priority column (month view). */
+  priorityCompact: boolean
   showDates: boolean
 }
 
@@ -150,14 +164,25 @@ const ROW_HEIGHT = 44
 const MIN_COL_WITH_SCROLL = 36
 const DATES_COL = 96
 const ASSIGNEE_COL = 150
+const PRIORITY_COL = 120
+/** Month view: colored dot only. */
+const PRIORITY_COL_COMPACT = 36
 const LIST_MIN = 160
-const LIST_MAX = 670
+const LIST_MAX = 790
 /** Reserved width for the library vertical scrollbar when content overflows. */
 const V_SCROLL_W = 12
 const LIST_DEFAULT: Record<ChartScale, number> = {
-  day: 530,
-  week: 560,
-  month: 520,
+  day: 650,
+  week: 680,
+  month: 560,
+}
+
+const PRIORITY_RANK: Record<TaskPriority, number> = {
+  Критический: 0,
+  Высокий: 1,
+  Средний: 2,
+  Низкий: 3,
+  Опционально: 4,
 }
 
 type ChartMetrics = {
@@ -199,6 +224,49 @@ function formatCompactRange(start: Date, exclusiveEnd: Date): string {
   return `${fmt(start)}–${fmt(end)}`
 }
 
+/** Flatten task fields for client-side full-row search. */
+function taskSearchHaystack(task: Task): string {
+  const start = parseISO(task.start_date)
+  const end = addDays(start, Math.max(task.duration, 1))
+  return [
+    task.id,
+    task.title,
+    task.description,
+    task.assignee,
+    task.priority,
+    task.start_date,
+    task.duration,
+    task.predecessors,
+    formatCompactRange(start, end),
+  ]
+    .filter((v) => v != null && String(v).trim() !== "")
+    .join("\n")
+    .toLocaleLowerCase("ru")
+}
+
+function compareTasks(a: Task, b: Task, key: SortKey, dir: SortDir): number {
+  const sign = dir === "asc" ? 1 : -1
+  if (key === "dates") {
+    const da = parseISO(a.start_date).getTime()
+    const db = parseISO(b.start_date).getTime()
+    if (da !== db) return (da < db ? -1 : 1) * sign
+    return (a.id - b.id) * sign
+  }
+  if (key === "priority") {
+    const pa = PRIORITY_RANK[a.priority ?? DEFAULT_TASK_PRIORITY] ?? 2
+    const pb = PRIORITY_RANK[b.priority ?? DEFAULT_TASK_PRIORITY] ?? 2
+    if (pa !== pb) return (pa - pb) * sign
+    return (a.id - b.id) * sign
+  }
+  const left =
+    key === "assignee" ? (a.assignee ?? "").trim() : a.title.trim()
+  const right =
+    key === "assignee" ? (b.assignee ?? "").trim() : b.title.trim()
+  const cmp = left.localeCompare(right, "ru", { sensitivity: "base" })
+  if (cmp !== 0) return cmp * sign
+  return (a.id - b.id) * sign
+}
+
 function formatDayLabel(date: Date): string {
   const weekday = WEEKDAY_LABELS[(date.getDay() + 6) % 7]
   return `${weekday}, ${date.getDate()} ${MONTHS_SHORT[date.getMonth()]} ${date.getFullYear()}`
@@ -222,34 +290,48 @@ function formatMonthLabel(date: Date): string {
 function buildListLayout(
   totalWidth: number,
   showAssignee: boolean,
+  showPriority: boolean,
   showDatesPref: boolean,
+  priorityCompact = false,
 ): ListLayout {
   const showDates = showDatesPref
   const showAssigneeEff = showAssignee
+  const showPriorityEff = showPriority
   if (totalWidth <= 0) {
     return {
       title: 0,
       assignee: 0,
+      priority: 0,
       dates: 0,
       total: 0,
       showAssignee: showAssigneeEff,
+      showPriority: showPriorityEff,
+      priorityCompact,
       showDates,
     }
   }
   const assignee = showAssigneeEff ? ASSIGNEE_COL : 0
+  const priority = showPriorityEff
+    ? priorityCompact
+      ? PRIORITY_COL_COMPACT
+      : PRIORITY_COL
+    : 0
   const dates = showDates ? DATES_COL : 0
-  const minNeeded = 96 + assignee + dates
+  const minNeeded = 96 + assignee + priority + dates
   const total = Math.min(
     LIST_MAX,
     Math.max(LIST_MIN, minNeeded, totalWidth),
   )
-  const title = Math.max(96, total - assignee - dates)
+  const title = Math.max(96, total - assignee - priority - dates)
   return {
     title,
     assignee,
+    priority,
     dates,
-    total: title + assignee + dates,
+    total: title + assignee + priority + dates,
     showAssignee: showAssigneeEff,
+    showPriority: showPriorityEff,
+    priorityCompact,
     showDates,
   }
 }
@@ -470,17 +552,44 @@ function lockTimelinePad(timeline: HTMLElement | null, padPx: number) {
 
 function AssigneeName({ name }: { name: string | null | undefined }) {
   const label = name?.trim() || "—"
-  const tip = name?.trim() || "Без исполнителя"
   return (
     <span
-      data-gantt-assignee-tip={tip}
-      title={tip}
       className={cn(
         "block min-w-0 truncate text-[13px] leading-tight",
         name?.trim() ? "text-foreground" : "text-muted-foreground",
       )}
     >
       {label}
+    </span>
+  )
+}
+
+function PriorityCell({
+  priority,
+  compact = false,
+}: {
+  priority: TaskPriority | null | undefined
+  compact?: boolean
+}) {
+  const value = priority ?? DEFAULT_TASK_PRIORITY
+  const color =
+    PRIORITY_COLORS[value]?.backgroundColor ??
+    PRIORITY_COLORS[DEFAULT_TASK_PRIORITY].backgroundColor
+  const dot = (
+    <span
+      data-gantt-priority-tip={value}
+      className="inline-flex size-2.5 shrink-0 cursor-default rounded-full"
+      style={{ backgroundColor: color }}
+      aria-label={value}
+    />
+  )
+  if (compact) return dot
+  return (
+    <span className="flex min-w-0 items-center gap-1.5">
+      {dot}
+      <span className="min-w-0 truncate text-[13px] leading-tight text-foreground">
+        {value}
+      </span>
     </span>
   )
 }
@@ -606,8 +715,12 @@ export function GanttChart({
   const [listWidth, setListWidth] = useState(() => LIST_DEFAULT.day)
   const [listCollapsed, setListCollapsed] = useState(false)
   const [showAssigneeCol, setShowAssigneeCol] = useState(true)
+  const [showPriorityCol, setShowPriorityCol] = useState(true)
   const [showDatesCol, setShowDatesCol] = useState(true)
   const [columnsMenuOpen, setColumnsMenuOpen] = useState(false)
+  const [searchQuery, setSearchQuery] = useState("")
+  const [sortKey, setSortKey] = useState<SortKey>("title")
+  const [sortDir, setSortDir] = useState<SortDir>("asc")
   const [timelineLeft, setTimelineLeft] = useState(LIST_DEFAULT.day)
   /** Current view is settled and safe to show. */
   const [isReady, setIsReady] = useState(false)
@@ -646,9 +759,11 @@ export function GanttChart({
       buildListLayout(
         listCollapsed ? 0 : listWidth,
         showAssigneeCol,
+        showPriorityCol,
         showDatesCol,
+        scale === "month",
       ),
-    [listWidth, listCollapsed, showAssigneeCol, showDatesCol],
+    [listWidth, listCollapsed, showAssigneeCol, showPriorityCol, showDatesCol, scale],
   )
 
   const listWidthForShell = listCollapsed ? 0 : listLayout.total
@@ -656,6 +771,27 @@ export function GanttChart({
   const tasksById = useMemo(
     () => new Map(tasks.map((task) => [String(task.id), task])),
     [tasks],
+  )
+
+  const preparedTasks = useMemo(() => {
+    const q = searchQuery.trim().toLocaleLowerCase("ru")
+    const filtered = q
+      ? tasks.filter((task) => taskSearchHaystack(task).includes(q))
+      : tasks.slice()
+    filtered.sort((a, b) => compareTasks(a, b, sortKey, sortDir))
+    return filtered
+  }, [tasks, searchQuery, sortKey, sortDir])
+
+  const toggleSort = useCallback(
+    (key: SortKey) => {
+      if (sortKey === key) {
+        setSortDir((d) => (d === "asc" ? "desc" : "asc"))
+      } else {
+        setSortKey(key)
+        setSortDir("asc")
+      }
+    },
+    [sortKey],
   )
 
   const visibleWindow = useMemo(
@@ -670,7 +806,7 @@ export function GanttChart({
     return formatMonthLabel(visibleWindow.start)
   }, [scale, visibleWindow.start])
 
-  const allGanttTasks = useMemo(() => toGanttTasks(tasks), [tasks])
+  const allGanttTasks = useMemo(() => toGanttTasks(preparedTasks), [preparedTasks])
 
   const visibleGanttTasks = useMemo(() => {
     const overlapping = allGanttTasks.filter((task) =>
@@ -689,13 +825,18 @@ export function GanttChart({
     [visibleGanttTasks, visibleWindow.start],
   )
 
-  const chartKey = `${scale}-${visibleWindow.start.toISOString()}-${listWidthForShell}-${listLayout.showAssignee}-${listLayout.showDates}`
+  const chartKey = `${scale}-${visibleWindow.start.toISOString()}-${listWidthForShell}-${listLayout.showAssignee}-${listLayout.showPriority}-${listLayout.showDates}-${searchQuery}-${sortKey}-${sortDir}`
 
   const listMinWidth = useMemo(() => {
     const assignee = showAssigneeCol ? ASSIGNEE_COL : 0
+    const priority = showPriorityCol
+      ? scale === "month"
+        ? PRIORITY_COL_COMPACT
+        : PRIORITY_COL
+      : 0
     const dates = showDatesCol ? DATES_COL : 0
-    return Math.max(LIST_MIN, 96 + assignee + dates)
-  }, [showAssigneeCol, showDatesCol])
+    return Math.max(LIST_MIN, 96 + assignee + priority + dates)
+  }, [showAssigneeCol, showPriorityCol, showDatesCol, scale])
 
   const onResizePointerDown = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -746,7 +887,7 @@ export function GanttChart({
         fontFamily: string
         fontSize: string
       }) {
-        const cols: { key: string; label: string; width: number }[] = [
+        const cols: { key: SortKey; label: string; width: number }[] = [
           { key: "title", label: "Задача", width: listLayout.title },
         ]
         if (listLayout.showAssignee) {
@@ -754,6 +895,13 @@ export function GanttChart({
             key: "assignee",
             label: "Исполнитель",
             width: listLayout.assignee,
+          })
+        }
+        if (listLayout.showPriority) {
+          cols.push({
+            key: "priority",
+            label: listLayout.priorityCompact ? "" : "Приоритет",
+            width: listLayout.priority,
           })
         }
         if (listLayout.showDates) {
@@ -774,27 +922,46 @@ export function GanttChart({
               className="flex w-full shrink-0 border-b border-border"
               style={{ height: HEADER_ROW_H }}
             >
-              {cols.map((col) => (
-                <div
-                  key={col.key}
-                  className={cn(
-                    "box-border flex shrink-0 items-center overflow-hidden px-1 text-xs font-medium text-muted-foreground",
-                    col.key === "dates" && "is-dates-col",
-                  )}
-                  style={{
-                    width: col.width,
-                    minWidth: col.width,
-                    maxWidth: col.width,
-                  }}
-                >
-                  {col.label ? <span className="truncate">{col.label}</span> : null}
-                </div>
-              ))}
+              {cols.map((col) => {
+                const active = sortKey === col.key
+                const Icon = !active
+                  ? ArrowUpDown
+                  : sortDir === "asc"
+                    ? ArrowUp
+                    : ArrowDown
+                const compactPriority =
+                  col.key === "priority" && listLayout.priorityCompact
+                return (
+                  <button
+                    key={col.key}
+                    type="button"
+                    className={cn(
+                      "box-border flex shrink-0 items-center gap-1 overflow-hidden px-1 text-left text-xs font-medium text-muted-foreground transition-colors hover:text-foreground",
+                      col.key === "dates" && "is-dates-col",
+                      compactPriority && "justify-center px-0",
+                      active && "text-foreground",
+                    )}
+                    style={{
+                      width: col.width,
+                      minWidth: col.width,
+                      maxWidth: col.width,
+                    }}
+                    onClick={() => toggleSort(col.key)}
+                    aria-label={`Сортировать по «${col.label || "Приоритет"}»`}
+                    title={compactPriority ? "Приоритет" : undefined}
+                  >
+                    {col.label ? (
+                      <span className="min-w-0 truncate">{col.label}</span>
+                    ) : null}
+                    <Icon className="size-3 shrink-0 opacity-70" aria-hidden />
+                  </button>
+                )
+              })}
             </div>
           </div>
         )
       },
-    [listLayout],
+    [listLayout, sortKey, sortDir, toggleSort],
   )
 
   const TaskListTable = useMemo(
@@ -875,6 +1042,26 @@ export function GanttChart({
                       }}
                     >
                       <AssigneeName name={source?.assignee} />
+                    </div>
+                  ) : null}
+                  {listLayout.showPriority ? (
+                    <div
+                      className={cn(
+                        "_3lLk3 flex items-center",
+                        listLayout.priorityCompact
+                          ? "justify-center px-0"
+                          : "px-1",
+                      )}
+                      style={{
+                        minWidth: listLayout.priority,
+                        maxWidth: listLayout.priority,
+                        height: rowHeight,
+                      }}
+                    >
+                      <PriorityCell
+                        priority={source?.priority}
+                        compact={listLayout.priorityCompact}
+                      />
                     </div>
                   ) : null}
                   {listLayout.showDates ? (
@@ -1261,17 +1448,17 @@ export function GanttChart({
 
     const dismiss = () => setHoverTip(null)
 
-    const tipFromAssignee = (
+    const tipFromPriority = (
       el: Element,
       clientX: number,
       clientY: number,
     ) => {
-      const name = el.getAttribute("data-gantt-assignee-tip")?.trim()
-      if (!name) {
+      const label = el.getAttribute("data-gantt-priority-tip")?.trim()
+      if (!label) {
         dismiss()
         return
       }
-      setHoverTip({ clientX, clientY, title: name, lines: [] })
+      setHoverTip({ clientX, clientY, title: label, lines: [] })
     }
 
     const tipFromBar = (bar: Element, clientX: number, clientY: number) => {
@@ -1296,9 +1483,9 @@ export function GanttChart({
     }
 
     const tipFromPoint = (target: Element, clientX: number, clientY: number) => {
-      const assignee = target.closest("[data-gantt-assignee-tip]")
-      if (assignee && shell.contains(assignee)) {
-        tipFromAssignee(assignee, clientX, clientY)
+      const priority = target.closest("[data-gantt-priority-tip]")
+      if (priority && shell.contains(priority)) {
+        tipFromPriority(priority, clientX, clientY)
         return
       }
       const bar = target.closest("._KxSXS")
@@ -1513,6 +1700,14 @@ export function GanttChart({
                 <label className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 hover:bg-muted">
                   <input
                     type="checkbox"
+                    checked={showPriorityCol}
+                    onChange={(e) => setShowPriorityCol(e.target.checked)}
+                  />
+                  Приоритет
+                </label>
+                <label className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 hover:bg-muted">
+                  <input
+                    type="checkbox"
                     checked={showDatesCol}
                     onChange={(e) => setShowDatesCol(e.target.checked)}
                   />
@@ -1535,6 +1730,16 @@ export function GanttChart({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          {!listCollapsed ? (
+            <Input
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Поиск…"
+              aria-label="Поиск по задачам"
+              className="h-8 shrink-0"
+              style={{ width: listLayout.title, maxWidth: "100%" }}
+            />
+          ) : null}
           <span className="text-sm text-muted-foreground">{periodTitle}</span>
           <div className="flex items-center gap-1">
             <Button
