@@ -143,7 +143,7 @@ export default function App() {
       </header>
 
       <section className="flex min-h-0 flex-1 flex-col overflow-hidden lg:flex-row">
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-hidden p-4 sm:p-6">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden px-4 pb-4 pt-0.5 sm:px-6 sm:pb-6">
           {tasksQuery.isLoading ? (
             <GanttLoadingSkeleton className="min-h-0" />
           ) : tasksQuery.isError ? (

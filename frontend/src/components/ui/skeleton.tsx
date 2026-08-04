@@ -13,11 +13,11 @@ function Skeleton({ className, ...props }: React.ComponentProps<"div">) {
 export function GanttLoadingSkeleton({ className }: { className?: string }) {
   return (
     <div
-      className={cn("flex min-h-0 flex-1 flex-col gap-3", className)}
+      className={cn("flex min-h-0 flex-1 flex-col gap-0.5", className)}
       aria-busy
       aria-label="Загрузка задач"
     >
-      <div className="flex flex-wrap items-center justify-between gap-2">
+      <div className="flex min-h-12 flex-wrap items-center justify-between gap-2">
         <div className="flex gap-2">
           <Skeleton className="h-7 w-14" />
           <Skeleton className="h-7 w-16" />

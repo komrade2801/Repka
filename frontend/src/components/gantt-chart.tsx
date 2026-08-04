@@ -128,10 +128,18 @@ const LIST_DEFAULT: Record<ChartScale, number> = {
 }
 
 type ChartMetrics = {
+  /**
+   * Width passed to gantt-task-react (uniform). When fitting the shell this is
+   * the average availableWidth / columns so the SVG spans the timeline flush.
+   */
   columnWidth: number
-  /** Exact N·colWidth — no leftover stub column on the right. */
+  /** Floor width for overlay cells; first `columnRemainder` columns get +1px. */
+  baseColWidth: number
+  /** Number of leading columns that are baseColWidth + 1. */
+  columnRemainder: number
+  /** Exact available timeline width (no stub gap on the right when fitting). */
   timelineWidth: number
-  /** List pane width; absorbs floor() remainder so the shell fills flush. */
+  /** List pane width (hint); timeline takes the remaining shell. */
   listWidth: number
   ganttHeight: number
   /** True only when fixed window is wider than the timeline viewport. */
@@ -296,23 +304,20 @@ function withoutSelectedBarStyles(tasks: GanttTask[]): GanttTask[] {
   })
 }
 
-function dayColumnRules(columnWidth: number): CSSProperties {
-  const line = "color-mix(in oklab, var(--border) 40%, transparent)"
-  return {
-    backgroundImage: `repeating-linear-gradient(
-      to right,
-      transparent 0,
-      transparent ${columnWidth - 1}px,
-      ${line} ${columnWidth - 1}px,
-      ${line} ${columnWidth}px
-    )`,
-  }
+/** Integer +1px remainder distribution: first N columns are one pixel wider. */
+function getColumnWidth(
+  index: number,
+  baseColWidth: number,
+  columnRemainder: number,
+): number {
+  return index < columnRemainder ? baseColWidth + 1 : baseColWidth
 }
 
 /**
- * Fit columns into the shell. Timeline is always exact N·columnWidth (no stub
- * column). Floor remainder goes to the left task list so list+timeline (+vscroll)
- * = shell. Horizontal overflow only when allowScroll and min col no longer fits.
+ * Fit columns into the shell. When not horizontally scrolling, timelineWidth
+ * equals availableWidth exactly; pixel remainder is spread via +1px on the
+ * first `remainder` columns (no stub gap, especially with the list collapsed).
+ * Horizontal overflow only when allowScroll and min col no longer fits.
  */
 function computeMetrics(
   shell: HTMLElement,
@@ -337,26 +342,64 @@ function computeMetrics(
   const available = Math.max(40, shellWidth - hint - vScrollWidth)
 
   let columnWidth: number
+  let baseColWidth: number
+  let columnRemainder: number
   let timelineWidth: number
   let listWidth: number
   let needsHorizontalScroll = false
+
+  const fitExact = (width: number) => {
+    const base = Math.floor(width / safeColumns)
+    if (base < 24) {
+      // Too narrow to fit at MIN_COL; keep uniform 24px (may overflow shell).
+      return {
+        baseColWidth: 24,
+        columnRemainder: 0,
+        timelineWidth: 24 * safeColumns,
+        columnWidth: 24,
+        listWidth:
+          hint > 0
+            ? Math.max(0, shellWidth - 24 * safeColumns - vScrollWidth)
+            : 0,
+      }
+    }
+    const rem = width - base * safeColumns
+    return {
+      baseColWidth: base,
+      columnRemainder: rem,
+      timelineWidth: width,
+      // Average for the library so N·col ≈ available (SVG flush with shell).
+      columnWidth: width / safeColumns,
+      listWidth: hint > 0 ? shellWidth - width - vScrollWidth : 0,
+    }
+  }
 
   if (allowScroll) {
     const natural = Math.floor(available / safeColumns)
     if (natural < MIN_COL_WITH_SCROLL) {
       columnWidth = MIN_COL_WITH_SCROLL
+      baseColWidth = MIN_COL_WITH_SCROLL
+      columnRemainder = 0
       needsHorizontalScroll = true
       timelineWidth = columnWidth * safeColumns
       listWidth = hint
     } else {
-      columnWidth = natural
-      timelineWidth = columnWidth * safeColumns
-      listWidth = hint > 0 ? shellWidth - timelineWidth - vScrollWidth : 0
+      ;({
+        columnWidth,
+        baseColWidth,
+        columnRemainder,
+        timelineWidth,
+        listWidth,
+      } = fitExact(available))
     }
   } else {
-    columnWidth = Math.max(24, Math.floor(available / safeColumns))
-    timelineWidth = columnWidth * safeColumns
-    listWidth = hint > 0 ? shellWidth - timelineWidth - vScrollWidth : 0
+    ;({
+      columnWidth,
+      baseColWidth,
+      columnRemainder,
+      timelineWidth,
+      listWidth,
+    } = fitExact(available))
   }
 
   const ganttHeight =
@@ -364,6 +407,8 @@ function computeMetrics(
 
   return {
     columnWidth,
+    baseColWidth,
+    columnRemainder,
     timelineWidth,
     listWidth,
     ganttHeight,
@@ -405,14 +450,16 @@ function AssigneeAvatar({ name }: { name: string | null | undefined }) {
 
 function PeriodHeader({
   left,
-  columnWidth,
   timelineWidth,
+  baseColWidth,
+  columnRemainder,
   dates,
   scale,
 }: {
   left: number
-  columnWidth: number
   timelineWidth: number
+  baseColWidth: number
+  columnRemainder: number
   dates: Date[]
   scale: ChartScale
 }) {
@@ -424,17 +471,16 @@ function PeriodHeader({
         width: timelineWidth,
         height: CALENDAR_HEADER_H,
         boxShadow: "inset 1px 0 0 var(--border)",
-        ...dayColumnRules(columnWidth),
       }}
     >
       <div
         className="box-border flex"
         style={{
-          width: columnWidth * dates.length,
+          width: timelineWidth,
           height: HEADER_ROW_H,
         }}
       >
-        {dates.map((date) => {
+        {dates.map((date, index) => {
           let label: string
           if (scale === "month") {
             label = String(date.getDate())
@@ -445,7 +491,10 @@ function PeriodHeader({
             <div
               key={date.toISOString()}
               className="box-border flex shrink-0 items-center justify-center text-xs font-medium"
-              style={{ width: columnWidth, height: HEADER_ROW_H }}
+              style={{
+                width: getColumnWidth(index, baseColWidth, columnRemainder),
+                height: HEADER_ROW_H,
+              }}
             >
               {label}
             </div>
@@ -459,29 +508,43 @@ function PeriodHeader({
 /** Full-window vertical day rules under bars (library ticks stop early). */
 function PeriodBodyGrid({
   left,
-  columnWidth,
   timelineWidth,
   height,
+  columns,
+  baseColWidth,
+  columnRemainder,
 }: {
   left: number
-  columnWidth: number
   timelineWidth: number
   height: number
+  columns: number
+  baseColWidth: number
+  columnRemainder: number
 }) {
+  const line = "color-mix(in oklab, var(--border) 40%, transparent)"
   return (
     <div
-      className="pointer-events-none absolute z-0"
+      className="pointer-events-none absolute z-0 flex"
       style={{
         left,
         top: CALENDAR_HEADER_H,
         width: timelineWidth,
         height,
-        boxShadow:
-          "inset 1px 0 0 color-mix(in oklab, var(--border) 40%, transparent)",
-        ...dayColumnRules(columnWidth),
+        boxShadow: `inset 1px 0 0 ${line}`,
       }}
       aria-hidden
-    />
+    >
+      {Array.from({ length: columns }, (_, index) => (
+        <div
+          key={index}
+          className="box-border h-full shrink-0"
+          style={{
+            width: getColumnWidth(index, baseColWidth, columnRemainder),
+            boxShadow: `inset -1px 0 0 ${line}`,
+          }}
+        />
+      ))}
+    </div>
   )
 }
 
@@ -494,6 +557,8 @@ export function GanttChart({
   const [viewDate, setViewDate] = useState(() => startOfDay(new Date()))
   const [metrics, setMetrics] = useState<ChartMetrics>({
     columnWidth: 80,
+    baseColWidth: 80,
+    columnRemainder: 0,
     timelineWidth: 560,
     listWidth: LIST_DEFAULT.day,
     ganttHeight: 400,
@@ -930,7 +995,9 @@ export function GanttChart({
       )
       setMetrics((prev) => {
         if (
-          Math.abs(prev.columnWidth - next.columnWidth) <= 1 &&
+          Math.abs(prev.columnWidth - next.columnWidth) <= 0.01 &&
+          prev.baseColWidth === next.baseColWidth &&
+          prev.columnRemainder === next.columnRemainder &&
           Math.abs(prev.timelineWidth - next.timelineWidth) <= 1 &&
           Math.abs(prev.listWidth - next.listWidth) <= 1 &&
           Math.abs(prev.ganttHeight - next.ganttHeight) <= 2 &&
@@ -1261,16 +1328,19 @@ export function GanttChart({
         <>
           <PeriodHeader
             left={frame.timelineLeft}
-            columnWidth={frame.metrics.columnWidth}
             timelineWidth={frame.metrics.timelineWidth}
+            baseColWidth={frame.metrics.baseColWidth}
+            columnRemainder={frame.metrics.columnRemainder}
             dates={frame.periodDates}
             scale={frame.scale}
           />
           <PeriodBodyGrid
             left={frame.timelineLeft}
-            columnWidth={frame.metrics.columnWidth}
             timelineWidth={frame.metrics.timelineWidth}
             height={frame.metrics.ganttHeight}
+            columns={frame.periodDates.length}
+            baseColWidth={frame.metrics.baseColWidth}
+            columnRemainder={frame.metrics.columnRemainder}
           />
           <Gantt
             key={frame.chartKey}
@@ -1315,8 +1385,8 @@ export function GanttChart({
   }
 
   return (
-    <div className={cn("flex min-h-0 flex-1 flex-col gap-3", className)}>
-      <div className="flex flex-wrap items-center justify-between gap-2">
+    <div className={cn("flex min-h-0 flex-1 flex-col gap-0.5", className)}>
+      <div className="flex min-h-12 flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap items-center gap-2">
           {SCALE_OPTIONS.map(({ scale: option, label }) => (
             <Button

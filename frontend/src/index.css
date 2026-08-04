@@ -177,7 +177,7 @@
 
 .gantt-shell.is-fixed-window.is-list-collapsed ._CZjuD {
   flex: 1 1 auto !important;
-  width: var(--gantt-timeline-width, calc(var(--gantt-cols, 7) * var(--gantt-col-width, 80px))) !important;
+  width: 100% !important;
   max-width: 100% !important;
 }
 
