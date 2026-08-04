@@ -1147,7 +1147,17 @@ export function GanttChart({
       setMetrics((prev) => (metricsEqual(prev, next) ? prev : next))
       setTimelineLeft(next.vScrollWidth + next.listWidth)
       if (visibleGanttTasks.length === 0) {
-        setFrozen(null)
+        setFrozen({
+          layoutKey,
+          scale,
+          metrics: next,
+          timelineLeft: next.vScrollWidth + next.listWidth,
+          periodDates,
+          tasks: chartTasks,
+          preSteps,
+          viewStart: visibleWindow.start,
+          columns: visibleWindow.columns,
+        })
         return
       }
       setFrozen((prev) =>
@@ -1197,7 +1207,17 @@ export function GanttChart({
     setTimelineLeft(next.vScrollWidth + next.listWidth)
 
     if (visibleGanttTasks.length === 0) {
-      setFrozen(null)
+      setFrozen({
+        layoutKey,
+        scale,
+        metrics: next,
+        timelineLeft: next.vScrollWidth + next.listWidth,
+        periodDates,
+        tasks: chartTasks,
+        preSteps,
+        viewStart: visibleWindow.start,
+        columns: visibleWindow.columns,
+      })
       setIsReady(true)
       hardWindowChangeRef.current = false
       return
@@ -1603,7 +1623,7 @@ export function GanttChart({
     }
   }, [isReady, tasks, layoutKey])
 
-  if (allGanttTasks.length === 0) {
+  if (tasks.length === 0) {
     return (
       <div
         className={cn(
@@ -1615,6 +1635,11 @@ export function GanttChart({
       </div>
     )
   }
+
+  const emptyBodyMessage =
+    searchQuery.trim().length > 0 && preparedTasks.length === 0
+      ? "Ничего не найдено"
+      : "Нет задач в выбранном периоде"
 
   const columnsForShell = isReady
     ? visibleWindow.columns
@@ -1652,29 +1677,62 @@ export function GanttChart({
       )}
       aria-hidden={!opts.visible}
     >
+      <PeriodHeader
+        left={frame.timelineLeft}
+        timelineWidth={frame.metrics.timelineWidth}
+        baseColWidth={frame.metrics.baseColWidth}
+        columnRemainder={frame.metrics.columnRemainder}
+        dates={frame.periodDates}
+        scale={frame.scale}
+      />
+      <PeriodBodyGrid
+        left={frame.timelineLeft}
+        timelineWidth={frame.metrics.timelineWidth}
+        height={frame.metrics.ganttHeight}
+        columns={frame.periodDates.length}
+        baseColWidth={frame.metrics.baseColWidth}
+        columnRemainder={frame.metrics.columnRemainder}
+      />
       {frame.tasks.length === 0 ? (
-        <div className="flex h-full items-center justify-center px-6 text-center text-sm text-muted-foreground">
-          Нет задач в выбранном периоде
-        </div>
-      ) : (
         <>
-          <PeriodHeader
-            left={frame.timelineLeft}
-            timelineWidth={frame.metrics.timelineWidth}
-            baseColWidth={frame.metrics.baseColWidth}
-            columnRemainder={frame.metrics.columnRemainder}
-            dates={frame.periodDates}
-            scale={frame.scale}
-          />
-          <PeriodBodyGrid
-            left={frame.timelineLeft}
-            timelineWidth={frame.metrics.timelineWidth}
-            height={frame.metrics.ganttHeight}
-            columns={frame.periodDates.length}
-            baseColWidth={frame.metrics.baseColWidth}
-            columnRemainder={frame.metrics.columnRemainder}
-          />
-          <Gantt
+          {!listCollapsed ? (
+            <div
+              className="absolute top-0 z-20 flex flex-col overflow-hidden border-r border-border bg-background"
+              style={{
+                left: frame.metrics.vScrollWidth,
+                width: frame.metrics.listWidth,
+                height: CALENDAR_HEADER_H + frame.metrics.ganttHeight,
+              }}
+            >
+              <TaskListHeader
+                headerHeight={CALENDAR_HEADER_H}
+                rowWidth={`${listLayout.total}`}
+                fontFamily="inherit"
+                fontSize="13px"
+              />
+              <div
+                className="flex flex-1 items-center justify-center px-3 text-center text-sm text-muted-foreground"
+                style={{ height: frame.metrics.ganttHeight }}
+              >
+                {emptyBodyMessage}
+              </div>
+            </div>
+          ) : (
+            <div
+              className="absolute z-10 flex items-center justify-center px-6 text-center text-sm text-muted-foreground"
+              style={{
+                left: frame.timelineLeft,
+                top: CALENDAR_HEADER_H,
+                width: frame.metrics.timelineWidth,
+                height: frame.metrics.ganttHeight,
+              }}
+            >
+              {emptyBodyMessage}
+            </div>
+          )}
+        </>
+      ) : (
+        <Gantt
             key={frame.layoutKey}
             tasks={ganttTasks}
             viewMode={ViewMode.Day}
@@ -1699,7 +1757,6 @@ export function GanttChart({
               globalThis.setTimeout(() => setSelectedTaskId(id), 0)
             }}
           />
-        </>
       )}
     </div>
     )

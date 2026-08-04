@@ -156,6 +156,7 @@
 - [x] Backend: базовый `search_tasks` — фильтр по `query` (title/description), `assignee`, `priority`, `limit` (default 10).
 - [x] Backend: расширить `search_tasks` диапазоном дат старта/финиша (SQL-фильтрация на бэкенде).
   - Зачем: «просроченные», «что стартует на этой неделе» без передачи всего списка задач модели.
+- [x] Backend: `search_tasks(on_date=…)` — пересечение рабочих интервалов (`Start ≤ date ≤ Finish`, `Finish = start + duration − 1`); правило в system prompt для «задачи на сегодня / на дату X».
 
 ##### Актуальность данных (Grounding & History Cleanup)
 - [x] Backend: убрать статичный `task_snapshot` (markdown-таблицу всех задач) из system prompt — экономия токенов.
@@ -179,13 +180,65 @@
 - [ ] Backend: `clear_task_assignee` / `remove_all_dependencies`.
   - Зачем: точечная очистка полей без передачи `None` / пустых строк.
 
-### Этап 10: Деплой и Документация
-- [ ] Создание `Dockerfile` для бэкенда и деплой на **Render** (Web Service).
-- [ ] Деплой фронтенда на **Vercel** (с прописыванием переменной API URL).
-- [x] Базовый `README.md` (быстрый старт + ссылки на `docs/`).
-  - [ ] Расширить README: архитектура в одном месте, секция про использование AI-ассистентов при разработке.
-- [ ] Написание файла `Roadmap-to-production.md` (PostgreSQL, **миграция int → UUID**, join-таблица зависимостей, WebSockets, Auth, merge-импорт и т.д.).
-- [ ] Запись демо-видео (GIF или MP4) с демонстрацией основного флоу.
+### Этап 10: Деплой (Render + Vercel) и документация сдачи
+
+Цель: ревьюер открывает URL → видит засидированный Гантт → может импортировать Excel, править через чат, экспортировать. В репо — README / Roadmap / демо / sample Excel (требования ТЗ).
+
+#### A. Подготовка монорепы (код и конфиг) — до нажатия Deploy
+
+##### Конфиг и секреты
+- [x] `.env.example`: только плейсхолдеры (`OPENROUTER_API_KEY=`, без реального ключа); добавить `CORS_ORIGINS`, `VITE_API_URL` (для фронта — комментарий / отдельный блок).
+- [x] Backend `Settings`: читать `CORS_ORIGINS` из env (CSV или JSON-список), не только localhost:5173 — иначе прод-фронт на Vercel получит CORS-блок.
+
+##### Backend — совместимость с Linux / Render
+- [x] Убрать безусловный `pywin32` из `requirements.txt`: оставить `pywin32>=311; sys_platform == "win32"` (как в metadata `mcp`); на Linux маркер пропускает пакет. `tzdata` оставлен (МСК). Файл перезаписан в UTF-8 (был UTF-16 — ломал `pip` в Docker/Render).
+- [x] Проверить, что все зависимости ставятся на Linux: `docker run python:3.12-slim` + `pip install -r requirements.txt` + `scripts/verify_requirements.py` → `LINUX_REQUIREMENTS_OK`; `pywin32` не ставится. При переходе на Postgres — добавить драйвер (`psycopg[binary]` / `psycopg2-binary`) в requirements.
+- [x] `Dockerfile` в `backend/` (+ `.dockerignore`):
+  - base: `python:3.12-slim`;
+  - `WORKDIR /app`, copy `requirements.txt` → `pip install --no-cache-dir`;
+  - copy `app/` + `seed.py`;
+  - `CMD` через uvicorn **без** `--reload`: `uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}` (Render передаёт `PORT`);
+  - `HEALTHCHECK` на `GET /health`. Проверено: `docker build` + `GET /health` → `{"status":"ok"}`.
+- [ ] Документировать стратегию БД на Render:
+  - **демо-минимум:** SQLite + **Persistent Disk** (путь файла на диске, напр. `/data/repka.db` → `DATABASE_URL=sqlite:////data/repka.db`) **или** seed на каждый cold start без диска (данные эфемерны);
+  - **предпочтительно для сдачи:** managed Postgres (`DATABASE_URL=postgresql+psycopg://…`) — модели уже SQLAlchemy; `ensure_sqlite_columns` на PG не мешает (no-op / skip).
+
+##### Frontend — совместимость с Vercel
+- [ ] Сборка из `frontend/` (Root Directory = `frontend` в Vercel): `npm install` + `npm run build`, Output = `dist`.
+- [ ] Env на Vercel: `VITE_API_URL=https://<render-service>.onrender.com` (без trailing slash; подставляется на **build**-time).
+- [ ] Опционально `frontend/vercel.json`: SPA fallback не обязателен (нет client-router), можно пустой / не добавлять.
+- [ ] Прогнать локально `npm run build` — убедиться, что production-сборка зелёная до деплоя.
+- [ ] Таймаут чата: фронт уже 120 с; на Render Free cold start + LLM могут упираться в gateway — в README предупредить; при необходимости статус «Агент думает» (этап 8) или увеличить timeout сервиса.
+
+##### Репозиторий / артефакты ТЗ (файлы в монорепе)
+- [ ] Sample Excel: `samples/demo-tasks.xlsx` уже есть; опционально добавить короткий `samples/demo-tasks-small.xlsx` (~10–15 строк) для видео и быстрой проверки.
+- [ ] `Roadmap-to-production.md` в корне: PostgreSQL, int→UUID, join `task_dependencies`, Auth, WebSockets, merge-импорт, слой B (FS auto-shift), риски (стоимость LLM, rate limit, отсутствие multi-tenant), порядок закрытия.
+- [ ] Расширить `README.md`:
+  - быстрый старт (local);
+  - архитектура + ключевые ADR (кратко + ссылки на `docs/`);
+  - **отдельный раздел: использование AI-ассистентов при разработке** (требование ТЗ);
+  - деплой: Render (backend) + Vercel (frontend), список env;
+  - ссылки на sample Excel, Roadmap, демо-видео.
+- [ ] Демо-видео / GIF: Excel → чат (мутация) → Гантт обновился → экспорт; положить в `docs/demo.gif` / `docs/demo.mp4` или ссылку в README.
+- [ ] Подтянуть устаревшие места в `docs/app.md` (snapshot задач в промпте уже убран) перед сдачей.
+
+#### B. Деплой (порядок действий на хостингах)
+
+##### Render (API)
+- [ ] New → Web Service → connect repo → Docker (`backend/Dockerfile`) **или** Native: root `backend`, build `pip install -r requirements.txt`, start `uvicorn app.main:app --host 0.0.0.0 --port $PORT`.
+- [ ] Env: `OPENROUTER_API_KEY`, `OPENROUTER_MODEL` (опц.), `CORS_ORIGINS=https://<vercel-app>.vercel.app`, `AUTO_SEED=true`, `DATABASE_URL` (disk/Postgres).
+- [ ] Persistent Disk (если SQLite) или Postgres addon; проверить `GET /health` → `{"status":"ok"}`.
+- [ ] После первого деплоя фронта — дописать точный Vercel origin в `CORS_ORIGINS` и redeploy API при необходимости.
+
+##### Vercel (SPA)
+- [ ] Import repo → Root Directory `frontend` → Framework Vite → Build `npm run build` → Output `dist`.
+- [ ] Env: `VITE_API_URL` = публичный URL Render; **Redeploy** после смены env (Vite inlines на build).
+- [ ] Проверка: открыть сайт → задачи на Ганте (seed) → Импорт / Чат / Экспорт / модалка.
+
+#### C. Чеклист приёмки перед отправкой ТЗ
+- [ ] Прод-URL открывается без локального бэкенда; CORS ок; чат отвечает (ключ валиден).
+- [ ] Сценарий ТЗ на проде пройден вручную.
+- [ ] В репо: README (архитектура + AI-ассистенты) + Roadmap + sample Excel + демо + ссылки на git и deployed app.
 
 ---
 
@@ -196,4 +249,4 @@
 | 1–7 | **готово** (этап 7: слой B опционально — не делали) |
 | 8 | **частично** — priority / раскраска / навигация / исполнитель / поиск+сортировка есть; остаётся шапка, сплошной таймлайн, статус чата |
 | 9 | **частично** — P1+P2 готовы; остаётся P3 (автосдвиг / clear fields) |
-| 10 | **не начат** (кроме черновика README) |
+| 10 | **не начат** (кроме черновика README + sample Excel); блок A — подготовка монорепы перед Render/Vercel |

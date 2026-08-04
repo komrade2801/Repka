@@ -1,0 +1,11 @@
+venv/
+.venv/
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.db
+.tmp*
+.pytest_cache/
+.mypy_cache/
+scripts/
+*.md

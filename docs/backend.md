@@ -161,7 +161,7 @@ Append уникальных по `title` (без учёта регистра):
 
 `app/agent.py` — `run_chat(message, history, db, settings)`:
 
-1. System prompt: МСК-дата; **без** полного снимка задач; grounding (свежий search перед мутациями).
+1. System prompt: МСК-дата; границы недели Пн–Вс; **без** полного снимка задач; grounding (свежий search перед мутациями).
 2. Messages: system + history (`user`/`assistant`) + текущее сообщение; перед LLM — tool stripping (старше 2 раундов).
 3. Схемы tools из MCP → OpenAI function tools; `set_tool_db` на время цикла.
 4. До **6** раундов: completion → `mcp.call_tool` → role `tool` → снова LLM.
@@ -175,8 +175,8 @@ Tools: аналитика/поиск + move/assign/create/delete, duration/prior
 
 | Tool | Аргументы | Действие |
 | --- | --- | --- |
-| `get_project_summary` | `assignee?`, `priority?` | Агрегаты COUNT / GROUP BY |
-| `search_tasks` | `query?`, `assignee?`, `priority?`, `start_from/to?`, `finish_from/to?`, `limit=10` | SQL-поиск/фильтр (finish = start + duration) |
+| `get_project_summary` | `assignee?`, `priority?`, `on_date?`, `active_from?`+`active_to?` | Агрегаты COUNT / GROUP BY; даты — пересечение рабочих интервалов |
+| `search_tasks` | `query?`, `assignee?`, `priority?`, `on_date?`, `active_from/to?`, `starts_from/to?`, `ends_from/to?`, `limit=10` | ACTIVE = пересечение; STARTS / ENDS = только старт / финиш |
 | `move_task` | `task_id`, `new_start_date` | `start_date` (`dd.mm.yy`) |
 | `bulk_move_tasks` / `bulk_assign_tasks` / `bulk_delete_tasks` | `task_ids` + значение | Массовые мутации (до 100 id) |
 | `assign_task` | `task_id`, `assignee` | Исполнитель (`` → сброс) |

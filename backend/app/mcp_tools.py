@@ -97,16 +97,17 @@ def _optional_date(value: str | None, field: str) -> date | None:
         ) from exc
 
 
-def _finish_date_expr():
-    """Gantt end date: start_date + duration days (same as frontend addDays)."""
+def _inclusive_finish_expr():
+    """Last active calendar day: start_date + duration - 1 (Finish for interval math)."""
     return func.date(
         Task.start_date,
-        cast(Task.duration, String) + " days",
+        cast(Task.duration - 1, String) + " days",
     )
 
 
 def _task_finish_date(task: Task) -> date:
-    return task.start_date + timedelta(days=max(task.duration, 1))
+    """Inclusive last active day of the task interval."""
+    return task.start_date + timedelta(days=max(task.duration, 1) - 1)
 
 
 def _apply_task_filters(
@@ -119,8 +120,16 @@ def _apply_task_filters(
     start_to: date | None = None,
     finish_from: date | None = None,
     finish_to: date | None = None,
+    on_date: date | None = None,
+    active_from: date | None = None,
+    active_to: date | None = None,
 ):
-    """Apply optional filters. Assignee uses case-insensitive contains; priority is canonical."""
+    """Apply optional filters. Assignee uses case-insensitive contains; priority is canonical.
+
+    start_*/finish_* filter by start_date or inclusive Finish alone.
+    on_date / active_from+active_to use working-interval intersection
+    (Start ≤ bound AND Finish ≥ bound; Finish = start + duration − 1).
+    """
     clean_assignee = _optional_str(assignee)
     if clean_assignee:
         query = query.filter(Task.assignee.ilike(f"%{clean_assignee}%"))
@@ -141,11 +150,27 @@ def _apply_task_filters(
     if start_to is not None:
         query = query.filter(Task.start_date <= start_to)
 
-    finish_expr = _finish_date_expr()
+    # finish_from/to use inclusive last active day (start + duration - 1).
+    finish_expr = _inclusive_finish_expr()
     if finish_from is not None:
         query = query.filter(finish_expr >= finish_from.isoformat())
     if finish_to is not None:
         query = query.filter(finish_expr <= finish_to.isoformat())
+
+    # Active on date: Start <= on_date <= Finish.
+    if on_date is not None:
+        target = on_date.isoformat()
+        query = query.filter(
+            Task.start_date <= on_date,
+            finish_expr >= target,
+        )
+
+    # Active during [active_from, active_to]: Start <= active_to AND Finish >= active_from.
+    if active_from is not None or active_to is not None:
+        if active_to is not None:
+            query = query.filter(Task.start_date <= active_to)
+        if active_from is not None:
+            query = query.filter(finish_expr >= active_from.isoformat())
 
     return query
 
@@ -154,19 +179,56 @@ def _apply_task_filters(
 def get_project_summary(
     assignee: str | None = None,
     priority: str | None = None,
+    on_date: str | None = None,
+    active_from: str | None = None,
+    active_to: str | None = None,
 ) -> str:
-    """Aggregated task analytics (counts by assignee and priority). Use for «сколько задач», загрузка, распределение по приоритетам — do not count from the prompt table."""
+    """Aggregated task analytics ONLY (counts by assignee and priority). No task titles/IDs.
+
+    Use for «сколько», «статистика», «распределение», «загрузка».
+    Do NOT use for «какие задачи…» / «перечисли» / «покажи список» — use search_tasks instead.
+
+    Optional date filters (dd.mm.yy) restrict COUNT/GROUP BY to tasks whose working
+    interval intersects the period — not only those that start inside it:
+    - on_date: active that calendar day (Start ≤ date ≤ Finish)
+    - active_from + active_to: active anytime in [active_from, active_to]
+      (Start ≤ active_to AND Finish ≥ active_from; Finish = start + duration − 1)
+
+    For time-scoped counts always pass date bounds.
+    """
+    parsed_on_date = _optional_date(on_date, "on_date")
+    parsed_active_from = _optional_date(active_from, "active_from")
+    parsed_active_to = _optional_date(active_to, "active_to")
+
+    if parsed_on_date is not None and (
+        parsed_active_from is not None or parsed_active_to is not None
+    ):
+        raise ValueError("Pass either on_date or active_from/active_to, not both")
+    if (parsed_active_from is None) ^ (parsed_active_to is None):
+        raise ValueError("active_from and active_to must be passed together")
+    if (
+        parsed_active_from is not None
+        and parsed_active_to is not None
+        and parsed_active_from > parsed_active_to
+    ):
+        raise ValueError("active_from must be <= active_to")
+
+    filter_kwargs: dict = {
+        "assignee": assignee,
+        "priority": priority,
+        "on_date": parsed_on_date,
+        "active_from": parsed_active_from,
+        "active_to": parsed_active_to,
+    }
+
     db = _db()
-    base = _apply_task_filters(
-        db.query(Task), assignee=assignee, priority=priority
-    )
+    base = _apply_task_filters(db.query(Task), **filter_kwargs)
     total = base.count()
 
     by_assignee_rows = (
         _apply_task_filters(
             db.query(Task.assignee, func.count(Task.id)),
-            assignee=assignee,
-            priority=priority,
+            **filter_kwargs,
         )
         .group_by(Task.assignee)
         .order_by(func.count(Task.id).desc())
@@ -175,8 +237,7 @@ def get_project_summary(
     by_priority_rows = (
         _apply_task_filters(
             db.query(Task.priority, func.count(Task.id)),
-            assignee=assignee,
-            priority=priority,
+            **filter_kwargs,
         )
         .group_by(Task.priority)
         .order_by(func.count(Task.id).desc())
@@ -184,13 +245,19 @@ def get_project_summary(
     )
 
     lines = [f"total_tasks: {total}"]
-    if _optional_str(assignee) or _optional_str(priority):
-        filters = []
-        if _optional_str(assignee):
-            filters.append(f"assignee~{_optional_str(assignee)}")
-        if _optional_str(priority):
-            filters.append(f"priority={normalize_priority(priority)}")
-        lines.append(f"filters: {', '.join(filters)}")
+    filter_bits: list[str] = []
+    if _optional_str(assignee):
+        filter_bits.append(f"assignee~{_optional_str(assignee)}")
+    if _optional_str(priority):
+        filter_bits.append(f"priority={normalize_priority(priority)}")
+    if parsed_on_date is not None:
+        filter_bits.append(f"on_date={format_date_ddmmyy(parsed_on_date)}")
+    if parsed_active_from is not None and parsed_active_to is not None:
+        filter_bits.append(
+            f"active={format_date_ddmmyy(parsed_active_from)}…{format_date_ddmmyy(parsed_active_to)}"
+        )
+    if filter_bits:
+        lines.append(f"filters: {', '.join(filter_bits)}")
 
     lines.append("by_assignee:")
     if not by_assignee_rows:
@@ -214,35 +281,69 @@ def search_tasks(
     query: str | None = None,
     assignee: str | None = None,
     priority: str | None = None,
-    start_from: str | None = None,
-    start_to: str | None = None,
-    finish_from: str | None = None,
-    finish_to: str | None = None,
+    on_date: str | None = None,
+    active_from: str | None = None,
+    active_to: str | None = None,
+    starts_from: str | None = None,
+    starts_to: str | None = None,
+    ends_from: str | None = None,
+    ends_to: str | None = None,
     limit: int = 10,
 ) -> str:
-    """Search/filter tasks by text, assignee, priority, and start/finish date ranges (dd.mm.yy). Finish = start_date + duration days. Prefer this over scanning the prompt table."""
+    """Return a list of matching tasks (id, title, assignee, dates). Use for «какие / перечисли / покажи».
+
+    Not for bare counts — use get_project_summary for «сколько».
+
+    Date modes (dd.mm.yy; do not mix ACTIVE with STARTS/ENDS unless intentional):
+
+    1) ACTIVE (interval intersection) — «какие задачи на сегодня / на этой неделе / попадают на неделю»:
+       - on_date: Start ≤ date ≤ Finish (Finish = start + duration − 1)
+       - active_from + active_to: Start ≤ active_to AND Finish ≥ active_from
+         (overlaps the period even if started earlier). For this week raise limit (e.g. 50).
+
+    2) STARTS — «какие начинаются / стартуют …»:
+       - starts_from / starts_to: filter by start_date only
+
+    3) ENDS — «какие заканчиваются / финишируют …»:
+       - ends_from / ends_to: filter by inclusive Finish only
+    """
     if limit < 1:
         raise ValueError("limit must be >= 1")
     if limit > 50:
         limit = 50
 
-    parsed_start_from = _optional_date(start_from, "start_from")
-    parsed_start_to = _optional_date(start_to, "start_to")
-    parsed_finish_from = _optional_date(finish_from, "finish_from")
-    parsed_finish_to = _optional_date(finish_to, "finish_to")
+    parsed_on_date = _optional_date(on_date, "on_date")
+    parsed_active_from = _optional_date(active_from, "active_from")
+    parsed_active_to = _optional_date(active_to, "active_to")
+    parsed_starts_from = _optional_date(starts_from, "starts_from")
+    parsed_starts_to = _optional_date(starts_to, "starts_to")
+    parsed_ends_from = _optional_date(ends_from, "ends_from")
+    parsed_ends_to = _optional_date(ends_to, "ends_to")
 
-    if (
-        parsed_start_from is not None
-        and parsed_start_to is not None
-        and parsed_start_from > parsed_start_to
+    if parsed_on_date is not None and (
+        parsed_active_from is not None or parsed_active_to is not None
     ):
-        raise ValueError("start_from must be <= start_to")
+        raise ValueError("Pass either on_date or active_from/active_to, not both")
+    if (parsed_active_from is None) ^ (parsed_active_to is None):
+        raise ValueError("active_from and active_to must be passed together")
     if (
-        parsed_finish_from is not None
-        and parsed_finish_to is not None
-        and parsed_finish_from > parsed_finish_to
+        parsed_active_from is not None
+        and parsed_active_to is not None
+        and parsed_active_from > parsed_active_to
     ):
-        raise ValueError("finish_from must be <= finish_to")
+        raise ValueError("active_from must be <= active_to")
+    if (
+        parsed_starts_from is not None
+        and parsed_starts_to is not None
+        and parsed_starts_from > parsed_starts_to
+    ):
+        raise ValueError("starts_from must be <= starts_to")
+    if (
+        parsed_ends_from is not None
+        and parsed_ends_to is not None
+        and parsed_ends_from > parsed_ends_to
+    ):
+        raise ValueError("ends_from must be <= ends_to")
 
     db = _db()
     q = _apply_task_filters(
@@ -250,10 +351,13 @@ def search_tasks(
         assignee=assignee,
         priority=priority,
         text_query=query,
-        start_from=parsed_start_from,
-        start_to=parsed_start_to,
-        finish_from=parsed_finish_from,
-        finish_to=parsed_finish_to,
+        on_date=parsed_on_date,
+        active_from=parsed_active_from,
+        active_to=parsed_active_to,
+        start_from=parsed_starts_from,
+        start_to=parsed_starts_to,
+        finish_from=parsed_ends_from,
+        finish_to=parsed_ends_to,
     )
     total = q.count()
     rows = q.order_by(Task.id).limit(limit).all()

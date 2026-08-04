@@ -12,8 +12,8 @@ Tools вызываются **in-process** (та же SQLAlchemy-сессия, ч
 
 | Tool | Аргументы | Действие |
 | --- | --- | --- |
-| `get_project_summary` | `assignee?`, `priority?` | `COUNT` / `GROUP BY` assignee и priority |
-| `search_tasks` | `query?`, `assignee?`, `priority?`, `start_from/to?`, `finish_from/to?`, `limit=10` | SQL-фильтр; даты `dd.mm.yy`; finish = start + duration |
+| `get_project_summary` | `assignee?`, `priority?`, `on_date?`, `active_from?`+`active_to?` | `COUNT` / `GROUP BY`; период — пересечение интервалов |
+| `search_tasks` | `query?`, `assignee?`, `priority?`, `on_date?`, `active_from/to?`, `starts_from/to?`, `ends_from/to?`, `limit=10` | ACTIVE = пересечение; STARTS = по `start_date`; ENDS = по Finish; даты `dd.mm.yy` |
 | `move_task` | `task_id`, `new_start_date` | Смена `start_date` (`dd.mm.yy`) |
 | `bulk_move_tasks` | `task_ids`, `new_start_date` | Массовый перенос |
 | `bulk_assign_tasks` | `task_ids`, `new_assignee` | Массовое назначение (`` → сброс) |
@@ -29,9 +29,9 @@ Tools вызываются **in-process** (та же SQLAlchemy-сессия, ч
 
 ## Цикл `run_chat`
 
-1. System prompt: МСК-дата/день недели; **без** полного снимка задач.
+1. System prompt: МСК-дата/день недели + границы текущей недели Пн–Вс; **без** полного снимка задач.
 2. History: только `user` / `assistant` с клиента; перед каждым LLM-вызовом tool stripping (`KEEP_TOOL_RESULT_ROUNDS = 2`).
-3. Grounding: модель обязана перепроверять ID через `search_tasks` / `get_project_summary` перед мутациями.
+3. Grounding: перед мутациями — свежий search/summary. **Список** («какие задачи…») → только `search_tasks`; **счёт** («сколько…») → `get_project_summary`. На неделе/сегодня: ACTIVE `active_from`+`active_to` / `on_date`; «начинаются» → `starts_*`; «заканчиваются» → `ends_*`.
 4. До `MAX_TOOL_ROUNDS = 6`: completion → `mcp.call_tool` → role `tool`.
 5. Ответ: `(reply, tools_used)`.
 
