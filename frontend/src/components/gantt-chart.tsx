@@ -1094,13 +1094,16 @@ export function GanttChart({
   }, [isReady, metrics.columnWidth, chartKey, frozen?.chartKey])
 
   /**
-   * Own vertical wheel: gantt-task-react can clamp scrollY to 0 at the bottom
-   * (ignoreScrollEvent / stale max), teleporting list + timeline to the top.
-   * We stop the library handler and drive scroll via `_1eT-t` + pane sync.
+   * Own wheel handling:
+   * - Vertical: gantt-task-react can clamp scrollY to 0 at the bottom; we drive
+   *   `_1eT-t` + list/timeline panes ourselves.
+   * - Horizontal (Shift+wheel / trackpad deltaX): timeline is overflow:hidden, so
+   *   we must scroll the shell when `needsHorizontalScroll` (month + chat).
    */
   useEffect(() => {
     const shell = shellRef.current
-    if (!shell || !isReady || !metrics.needsVerticalScroll) return
+    if (!shell || !isReady) return
+    if (!metrics.needsVerticalScroll && !metrics.needsHorizontalScroll) return
 
     const lastTop = new WeakMap<HTMLElement, number>()
     const intendedY = { current: 0 }
@@ -1131,10 +1134,32 @@ export function GanttChart({
       if (timelineBody) lastTop.set(timelineBody, clamped)
     }
 
+    const applyHorizontalScroll = (delta: number) => {
+      const max = Math.max(0, shell.scrollWidth - shell.clientWidth)
+      if (max <= 0) return
+      const next = Math.min(max, Math.max(0, shell.scrollLeft + delta))
+      if (shell.scrollLeft !== next) shell.scrollLeft = next
+    }
+
     const onWheel = (event: WheelEvent) => {
-      const horizontal =
+      const wantsHorizontal =
         event.shiftKey || Math.abs(event.deltaX) > Math.abs(event.deltaY)
-      if (horizontal) return
+
+      if (wantsHorizontal && metrics.needsHorizontalScroll) {
+        event.preventDefault()
+        event.stopImmediatePropagation()
+        // Windows/Chrome: Shift+wheel reports deltaY; trackpads use deltaX.
+        const delta =
+          event.shiftKey && Math.abs(event.deltaY) >= Math.abs(event.deltaX)
+            ? event.deltaY
+            : event.deltaX !== 0
+              ? event.deltaX
+              : event.deltaY
+        applyHorizontalScroll(delta)
+        return
+      }
+
+      if (!metrics.needsVerticalScroll || wantsHorizontal) return
 
       event.preventDefault()
       event.stopImmediatePropagation()
@@ -1178,9 +1203,11 @@ export function GanttChart({
       lastTop.set(el, top)
     }
 
-    const vScrolls = [...shell.querySelectorAll<HTMLElement>("._1eT-t")]
-    const listBody = listBodyEl()
-    const timelineBody = timelineBodyEl()
+    const vScrolls = metrics.needsVerticalScroll
+      ? [...shell.querySelectorAll<HTMLElement>("._1eT-t")]
+      : []
+    const listBody = metrics.needsVerticalScroll ? listBodyEl() : null
+    const timelineBody = metrics.needsVerticalScroll ? timelineBodyEl() : null
     intendedY.current = vScrolls[0]?.scrollTop ?? 0
 
     shell.addEventListener("wheel", onWheel, { passive: false, capture: true })
@@ -1204,6 +1231,7 @@ export function GanttChart({
   }, [
     isReady,
     metrics.needsVerticalScroll,
+    metrics.needsHorizontalScroll,
     metrics.ganttHeight,
     chartKey,
     visibleGanttTasks.length,
