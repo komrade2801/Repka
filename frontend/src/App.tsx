@@ -37,6 +37,7 @@ export default function App() {
   const tasksQuery = useQuery({
     queryKey: TASKS_QUERY_KEY,
     queryFn: fetchTasks,
+    placeholderData: (previous) => previous,
   })
 
   const { importMutation } = useTaskMutations()

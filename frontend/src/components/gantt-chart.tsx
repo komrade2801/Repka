@@ -729,7 +729,7 @@ export function GanttChart({
    * Avoids blank/skeleton flashes on scale or slider changes.
    */
   const [frozen, setFrozen] = useState<{
-    chartKey: string
+    layoutKey: string
     scale: ChartScale
     metrics: ChartMetrics
     timelineLeft: number
@@ -825,7 +825,11 @@ export function GanttChart({
     [visibleGanttTasks, visibleWindow.start],
   )
 
-  const chartKey = `${scale}-${visibleWindow.start.toISOString()}-${listWidthForShell}-${listLayout.showAssignee}-${listLayout.showPriority}-${listLayout.showDates}-${searchQuery}-${sortKey}-${sortDir}`
+  /** Remount / hard-settle key — geometry only (not search/sort/task payload). */
+  const layoutKey = `${scale}-${visibleWindow.start.toISOString()}-${listWidthForShell}-${listLayout.showAssignee}-${listLayout.showPriority}-${listLayout.showDates}-${listLayout.priorityCompact}-${effectiveAllowScroll}`
+
+  const prevLayoutKeyRef = useRef<string | null>(null)
+  const hardWindowChangeRef = useRef(false)
 
   const listMinWidth = useMemo(() => {
     const assignee = showAssigneeCol ? ASSIGNEE_COL : 0
@@ -1090,12 +1094,14 @@ export function GanttChart({
 
   const changeScale = (next: ChartScale) => {
     if (next === scale) return
+    hardWindowChangeRef.current = true
     setIsReady(false)
     setScale(next)
     setListWidth(LIST_DEFAULT[next])
   }
 
   const shiftView = (direction: -1 | 0 | 1) => {
+    hardWindowChangeRef.current = true
     setIsReady(false)
     if (direction === 0) {
       setViewDate(startOfDay(new Date()))
@@ -1119,12 +1125,74 @@ export function GanttChart({
     return () => document.removeEventListener("pointerdown", onPointerDown)
   }, [columnsMenuOpen])
 
-  // Recompute metrics and settle the upcoming frame (hidden until ready).
+  // Hard settle (scale / window / list geometry) vs soft update (tasks / search / sort).
   useLayoutEffect(() => {
     const shell = shellRef.current
     const viewport = viewportRef.current
     if (!shell || !viewport) return
 
+    const layoutChanged = prevLayoutKeyRef.current !== layoutKey
+
+    const metricsEqual = (a: ChartMetrics, b: ChartMetrics) =>
+      Math.abs(a.columnWidth - b.columnWidth) <= 0.01 &&
+      a.baseColWidth === b.baseColWidth &&
+      a.columnRemainder === b.columnRemainder &&
+      Math.abs(a.timelineWidth - b.timelineWidth) <= 1 &&
+      Math.abs(a.listWidth - b.listWidth) <= 1 &&
+      Math.abs(a.ganttHeight - b.ganttHeight) <= 2 &&
+      a.needsHorizontalScroll === b.needsHorizontalScroll &&
+      a.needsVerticalScroll === b.needsVerticalScroll &&
+      a.vScrollWidth === b.vScrollWidth
+
+    // Soft path: keep the current frame visible; only refresh task payload / height.
+    if (!layoutChanged && isReady) {
+      const next = computeMetrics(
+        shell,
+        visibleWindow.columns,
+        effectiveAllowScroll,
+        listWidthForShell,
+        visibleGanttTasks.length,
+        viewport.clientHeight,
+      )
+      setMetrics((prev) => (metricsEqual(prev, next) ? prev : next))
+      setTimelineLeft(next.vScrollWidth + next.listWidth)
+      if (visibleGanttTasks.length === 0) {
+        setFrozen(null)
+        return
+      }
+      setFrozen((prev) =>
+        prev
+          ? {
+              ...prev,
+              metrics: next,
+              timelineLeft: next.vScrollWidth + next.listWidth,
+              tasks: chartTasks,
+              preSteps,
+              periodDates,
+              columns: visibleWindow.columns,
+            }
+          : {
+              layoutKey,
+              scale,
+              metrics: next,
+              timelineLeft: next.vScrollWidth + next.listWidth,
+              periodDates,
+              tasks: chartTasks,
+              preSteps,
+              viewStart: visibleWindow.start,
+              columns: visibleWindow.columns,
+            },
+      )
+      const timeline = shell.querySelector<HTMLElement>("._CZjuD")
+      if (timeline) lockTimelinePad(timeline, next.columnWidth)
+      return
+    }
+
+    if (layoutChanged) {
+      prevLayoutKeyRef.current = layoutKey
+    }
+
+    // Hard path: double-buffer until the library finishes layout.
     setIsReady(false)
 
     const next = computeMetrics(
@@ -1141,18 +1209,21 @@ export function GanttChart({
     if (visibleGanttTasks.length === 0) {
       setFrozen(null)
       setIsReady(true)
+      hardWindowChangeRef.current = false
       return
     }
 
     let cancelled = false
     let frames = 0
+    const resetScroll = hardWindowChangeRef.current || layoutChanged
 
     const settle = () => {
       if (cancelled) return
       frames += 1
 
-      const timeline = shell.querySelector<HTMLElement>("[data-gantt-pending] ._CZjuD")
-        ?? shell.querySelector<HTMLElement>("._CZjuD")
+      const timeline =
+        shell.querySelector<HTMLElement>("[data-gantt-pending] ._CZjuD") ??
+        shell.querySelector<HTMLElement>("._CZjuD")
       if (timeline) {
         lockTimelinePad(timeline, next.columnWidth)
       }
@@ -1163,11 +1234,14 @@ export function GanttChart({
       }
 
       lockTimelinePad(timeline, next.columnWidth)
-      if (!next.needsHorizontalScroll) shell.scrollLeft = 0
+      if (resetScroll && !next.needsHorizontalScroll) {
+        shell.scrollLeft = 0
+      }
+      hardWindowChangeRef.current = false
 
       setTimelineLeft(next.vScrollWidth + next.listWidth)
       setFrozen({
-        chartKey,
+        layoutKey,
         scale,
         metrics: next,
         timelineLeft: next.vScrollWidth + next.listWidth,
@@ -1180,7 +1254,6 @@ export function GanttChart({
       setIsReady(true)
     }
 
-    // Let React commit the pending (hidden) Gantt with new metrics first.
     const id = requestAnimationFrame(() => {
       requestAnimationFrame(settle)
     })
@@ -1189,15 +1262,16 @@ export function GanttChart({
       cancelled = true
       cancelAnimationFrame(id)
     }
+    // isReady read for soft-path gate; omitted from deps to avoid re-entry after settle.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- soft vs hard keyed by layoutKey + data
   }, [
+    layoutKey,
     scale,
-    viewDate,
     visibleGanttTasks,
     chartTasks,
     effectiveAllowScroll,
     visibleWindow.columns,
     visibleWindow.start,
-    chartKey,
     periodDates,
     preSteps,
     listWidthForShell,
@@ -1278,7 +1352,7 @@ export function GanttChart({
         timeline.removeEventListener("scroll", onScroll)
       })
     }
-  }, [isReady, metrics.columnWidth, chartKey, frozen?.chartKey])
+  }, [isReady, metrics.columnWidth, layoutKey, frozen?.layoutKey])
 
   /**
    * Own wheel handling:
@@ -1420,7 +1494,7 @@ export function GanttChart({
     metrics.needsVerticalScroll,
     metrics.needsHorizontalScroll,
     metrics.ganttHeight,
-    chartKey,
+    layoutKey,
     visibleGanttTasks.length,
   ])
 
@@ -1537,7 +1611,7 @@ export function GanttChart({
       shell.removeEventListener("scroll", refreshAfterScroll)
       dismiss()
     }
-  }, [isReady, tasks, chartKey])
+  }, [isReady, tasks, layoutKey])
 
   if (allGanttTasks.length === 0) {
     return (
@@ -1562,7 +1636,7 @@ export function GanttChart({
 
   const renderFrame = (
     frame: {
-      chartKey: string
+      layoutKey: string
       scale: ChartScale
       metrics: ChartMetrics
       timelineLeft: number
@@ -1582,10 +1656,10 @@ export function GanttChart({
     <div
       data-gantt-pending={opts.pending ? "true" : undefined}
       className={cn(
-        "relative min-h-0 flex-1",
+        "relative min-h-0 flex-1 transition-opacity duration-150 ease-out",
         opts.pending && "pointer-events-none absolute inset-0",
+        opts.visible ? "opacity-100" : "opacity-0",
       )}
-      style={{ visibility: opts.visible ? "visible" : "hidden" }}
       aria-hidden={!opts.visible}
     >
       {frame.tasks.length === 0 ? (
@@ -1611,7 +1685,7 @@ export function GanttChart({
             columnRemainder={frame.metrics.columnRemainder}
           />
           <Gantt
-            key={frame.chartKey}
+            key={frame.layoutKey}
             tasks={ganttTasks}
             viewMode={ViewMode.Day}
             viewDate={frame.viewStart}
@@ -1642,7 +1716,7 @@ export function GanttChart({
   }
 
   const pendingFrame = {
-    chartKey,
+    layoutKey,
     scale,
     metrics,
     timelineLeft,
