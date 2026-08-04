@@ -31,36 +31,41 @@ export function GanttLoadingSkeleton({ className }: { className?: string }) {
           <Skeleton className="h-7 w-7" />
         </div>
       </div>
-      <div className="flex min-h-0 flex-1 overflow-hidden rounded-lg border border-border">
-        <div className="flex w-[min(40%,280px)] shrink-0 flex-col border-r border-border">
-          <Skeleton className="h-10 w-full rounded-none" />
-          {Array.from({ length: 8 }, (_, i) => (
-            <div
-              key={i}
-              className="flex h-10 items-center gap-2 border-t border-border px-3"
-            >
-              <Skeleton className="h-3 flex-1" />
-              <Skeleton className="size-6 shrink-0 rounded-full" />
-            </div>
-          ))}
-        </div>
-        <div className="relative min-w-0 flex-1 overflow-hidden p-3">
-          <div className="mb-3 flex gap-1">
-            {Array.from({ length: 12 }, (_, i) => (
-              <Skeleton key={i} className="h-4 flex-1" />
+      <div className="min-h-0 w-full flex-1">
+        <div
+          className="box-border flex overflow-hidden rounded-lg border border-border"
+          style={{ height: 32 + 8 * 40 + 2, maxHeight: "100%" }}
+        >
+          <div className="flex w-[min(40%,280px)] shrink-0 flex-col border-r border-border">
+            <Skeleton className="h-8 w-full rounded-none" />
+            {Array.from({ length: 8 }, (_, i) => (
+              <div
+                key={i}
+                className="flex h-10 items-center gap-2 border-t border-border px-3"
+              >
+                <Skeleton className="h-3 flex-1" />
+                <Skeleton className="size-6 shrink-0 rounded-full" />
+              </div>
             ))}
           </div>
-          <div className="space-y-3 pt-2">
-            {Array.from({ length: 8 }, (_, i) => (
-              <Skeleton
-                key={i}
-                className="h-6"
-                style={{
-                  width: `${40 + ((i * 17) % 50)}%`,
-                  marginLeft: `${(i * 11) % 30}%`,
-                }}
-              />
-            ))}
+          <div className="relative min-w-0 flex-1 overflow-hidden p-3">
+            <div className="mb-3 flex gap-1">
+              {Array.from({ length: 12 }, (_, i) => (
+                <Skeleton key={i} className="h-4 flex-1" />
+              ))}
+            </div>
+            <div className="space-y-3 pt-2">
+              {Array.from({ length: 8 }, (_, i) => (
+                <Skeleton
+                  key={i}
+                  className="h-6"
+                  style={{
+                    width: `${40 + ((i * 17) % 50)}%`,
+                    marginLeft: `${(i * 11) % 30}%`,
+                  }}
+                />
+              ))}
+            </div>
           </div>
         </div>
       </div>

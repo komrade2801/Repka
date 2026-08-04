@@ -113,6 +113,8 @@ const MONTHS_LONG = [
 const HEADER_ROW_H = 32
 const CALENDAR_HEADER_H = HEADER_ROW_H
 const SPLITTER_W = 1
+/** Top + bottom border of `.gantt-shell` (border-box). */
+const SHELL_BORDER_Y = 2
 const ROW_HEIGHT = 44
 const MIN_COL_WITH_SCROLL = 36
 const DATES_COL = 96
@@ -318,6 +320,9 @@ function getColumnWidth(
  * equals availableWidth exactly; pixel remainder is spread via +1px on the
  * first `remainder` columns (no stub gap, especially with the list collapsed).
  * Horizontal overflow only when allowScroll and min col no longer fits.
+ *
+ * `maxShellHeight` is the viewport cap (parent flex area). Body height hugs
+ * task rows until that cap, then vertical scroll locks at the cap.
  */
 function computeMetrics(
   shell: HTMLElement,
@@ -325,18 +330,27 @@ function computeMetrics(
   allowScroll: boolean,
   listWidthHint = 0,
   taskCount = 0,
+  maxShellHeight?: number,
 ): ChartMetrics {
   const shellWidth = shell.clientWidth
   const hint = Math.max(0, listWidthHint)
   const safeColumns = Math.max(1, columns)
 
+  const maxH = Math.max(
+    CALENDAR_HEADER_H + ROW_HEIGHT + SHELL_BORDER_Y,
+    maxShellHeight ?? shell.clientHeight,
+  )
   const availableHeight = Math.max(
     ROW_HEIGHT,
-    Math.floor(shell.clientHeight - CALENDAR_HEADER_H),
+    Math.floor(maxH - CALENDAR_HEADER_H - SHELL_BORDER_Y),
   )
   // Library ganttFullHeight = taskCount * rowHeight (no synthetic rows).
-  const contentHeight = Math.max(ROW_HEIGHT, taskCount * ROW_HEIGHT)
-  const needsVerticalScroll = contentHeight > availableHeight
+  // Empty period: fill the viewport so the placeholder isn't a one-row stub.
+  const contentHeight =
+    taskCount <= 0
+      ? availableHeight
+      : Math.max(ROW_HEIGHT, taskCount * ROW_HEIGHT)
+  const needsVerticalScroll = taskCount > 0 && contentHeight > availableHeight
   const vScrollWidth = needsVerticalScroll ? V_SCROLL_W : 0
 
   const available = Math.max(40, shellWidth - hint - vScrollWidth)
@@ -402,8 +416,7 @@ function computeMetrics(
     } = fitExact(available))
   }
 
-  const ganttHeight =
-    contentHeight > availableHeight ? availableHeight : contentHeight
+  const ganttHeight = Math.min(contentHeight, availableHeight)
 
   return {
     columnWidth,
@@ -591,6 +604,8 @@ export function GanttChart({
   } | null>(null)
 
   const shellRef = useRef<HTMLDivElement>(null)
+  /** Flex area that defines the max shell height (shell itself may hug content). */
+  const viewportRef = useRef<HTMLDivElement>(null)
   const columnsMenuRef = useRef<HTMLDivElement>(null)
   const resizeDrag = useRef<{ startX: number; startWidth: number } | null>(null)
   const setSelectedTaskId = useUiStore((state) => state.setSelectedTaskId)
@@ -900,7 +915,8 @@ export function GanttChart({
   // Recompute metrics and settle the upcoming frame (hidden until ready).
   useLayoutEffect(() => {
     const shell = shellRef.current
-    if (!shell) return
+    const viewport = viewportRef.current
+    if (!shell || !viewport) return
 
     setIsReady(false)
 
@@ -910,6 +926,7 @@ export function GanttChart({
       effectiveAllowScroll,
       listWidthForShell,
       visibleGanttTasks.length,
+      viewport.clientHeight,
     )
     setMetrics(next)
     setTimelineLeft(next.vScrollWidth + next.listWidth)
@@ -979,10 +996,11 @@ export function GanttChart({
     listWidthForShell,
   ])
 
-  // Keep fitting when shell resizes after ready (e.g. chat open/close).
+  // Keep fitting when the viewport resizes after ready (e.g. chat open/close).
   useLayoutEffect(() => {
     const shell = shellRef.current
-    if (!shell) return
+    const viewport = viewportRef.current
+    if (!shell || !viewport) return
 
     const observer = new ResizeObserver(() => {
       if (!isReady) return
@@ -992,6 +1010,7 @@ export function GanttChart({
         effectiveAllowScroll,
         listWidthForShell,
         visibleGanttTasks.length,
+        viewport.clientHeight,
       )
       setMetrics((prev) => {
         if (
@@ -1025,7 +1044,7 @@ export function GanttChart({
         )
       }
     })
-    observer.observe(shell)
+    observer.observe(viewport)
     return () => observer.disconnect()
   }, [isReady, visibleWindow.columns, effectiveAllowScroll, visibleGanttTasks.length, listWidthForShell])
 
@@ -1475,70 +1494,77 @@ export function GanttChart({
         </div>
       </div>
 
-      <div
-        ref={shellRef}
-        className={cn(
-          "gantt-shell is-fixed-window min-h-0 w-full max-w-full flex-1 overflow-hidden rounded-lg border border-border bg-background",
-          needsScroll && "is-h-scroll",
-          metricsForShell.needsVerticalScroll && "is-v-scroll",
-          listCollapsed && "is-list-collapsed",
-        )}
-        style={
-          {
-            "--gantt-col-width": `${metricsForShell.columnWidth}px`,
-            "--gantt-cols": columnsForShell,
-            "--gantt-timeline-width": `${metricsForShell.timelineWidth}px`,
-            "--gantt-list-width": `${listWidthRendered}px`,
-            "--gantt-v-scroll-width": `${metricsForShell.vScrollWidth}px`,
-            "--gantt-body-height": `${metricsForShell.ganttHeight}px`,
-            "--gantt-header-height": `${CALENDAR_HEADER_H}px`,
-            "--gantt-tasks-height": `${Math.max(ROW_HEIGHT, (isReady ? visibleGanttTasks.length : (frozen?.tasks.length ?? 0)) * ROW_HEIGHT)}px`,
-          } as CSSProperties
-        }
-      >
+      <div ref={viewportRef} className="min-h-0 w-full max-w-full flex-1">
         <div
+          ref={shellRef}
           className={cn(
-            "relative box-border flex h-full min-h-0 flex-col",
-            needsScroll
-              ? "w-max min-w-full"
-              : "w-full max-w-full overflow-hidden",
+            "gantt-shell is-fixed-window box-border w-full max-w-full overflow-hidden rounded-lg border border-border bg-background",
+            needsScroll && "is-h-scroll",
+            metricsForShell.needsVerticalScroll && "is-v-scroll",
+            listCollapsed && "is-list-collapsed",
           )}
+          style={
+            {
+              height:
+                CALENDAR_HEADER_H +
+                metricsForShell.ganttHeight +
+                SHELL_BORDER_Y,
+              maxHeight: "100%",
+              "--gantt-col-width": `${metricsForShell.columnWidth}px`,
+              "--gantt-cols": columnsForShell,
+              "--gantt-timeline-width": `${metricsForShell.timelineWidth}px`,
+              "--gantt-list-width": `${listWidthRendered}px`,
+              "--gantt-v-scroll-width": `${metricsForShell.vScrollWidth}px`,
+              "--gantt-body-height": `${metricsForShell.ganttHeight}px`,
+              "--gantt-header-height": `${CALENDAR_HEADER_H}px`,
+              "--gantt-tasks-height": `${Math.max(ROW_HEIGHT, (isReady ? visibleGanttTasks.length : (frozen?.tasks.length ?? 0)) * ROW_HEIGHT)}px`,
+            } as CSSProperties
+          }
         >
-          {/* Keep previous ready frame visible while the next paints. */}
-          {!isReady && frozen
-            ? renderFrame(frozen, { visible: true })
-            : null}
+          <div
+            className={cn(
+              "relative box-border flex h-full min-h-0 flex-col",
+              needsScroll
+                ? "w-max min-w-full"
+                : "w-full max-w-full overflow-hidden",
+            )}
+          >
+            {/* Keep previous ready frame visible while the next paints. */}
+            {!isReady && frozen
+              ? renderFrame(frozen, { visible: true })
+              : null}
 
-          {/* Upcoming / current frame: hidden until settled, then shown. */}
-          {renderFrame(pendingFrame, {
-            pending: !isReady && frozen !== null,
-            visible: isReady,
-          })}
+            {/* Upcoming / current frame: hidden until settled, then shown. */}
+            {renderFrame(pendingFrame, {
+              pending: !isReady && frozen !== null,
+              visible: isReady,
+            })}
 
-          {!listCollapsed ? (
-            <div
-              role="separator"
-              aria-orientation="vertical"
-              aria-label="Ширина таблицы задач"
-              className="absolute z-30 cursor-col-resize touch-none"
-              style={{
-                left: Math.max(0, listLeftRendered - SPLITTER_W),
-                top: 0,
-                width: SPLITTER_W + 4,
-                height: CALENDAR_HEADER_H + metricsForShell.ganttHeight,
-                marginLeft: -2,
-              }}
-              onPointerDown={onResizePointerDown}
-              onPointerMove={onResizePointerMove}
-              onPointerUp={onResizePointerUp}
-              onPointerCancel={onResizePointerUp}
-            >
+            {!listCollapsed ? (
               <div
-                className="pointer-events-none absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-border"
-                aria-hidden
-              />
-            </div>
-          ) : null}
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="Ширина таблицы задач"
+                className="absolute z-30 cursor-col-resize touch-none"
+                style={{
+                  left: Math.max(0, listLeftRendered - SPLITTER_W),
+                  top: 0,
+                  width: SPLITTER_W + 4,
+                  height: CALENDAR_HEADER_H + metricsForShell.ganttHeight,
+                  marginLeft: -2,
+                }}
+                onPointerDown={onResizePointerDown}
+                onPointerMove={onResizePointerMove}
+                onPointerUp={onResizePointerUp}
+                onPointerCancel={onResizePointerUp}
+              >
+                <div
+                  className="pointer-events-none absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-border"
+                  aria-hidden
+                />
+              </div>
+            ) : null}
+          </div>
         </div>
       </div>
 
