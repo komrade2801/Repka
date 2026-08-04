@@ -201,34 +201,22 @@
 
 /*
  * Vertical scrollbar strip on the left.
- * Scroll math MUST match gantt-task-react: viewport = body, content = tasks
- * (maxScroll = tasksHeight − bodyHeight). Extending both by headerHeight looked
- * continuous but raced ignoreScrollEvent and teleported scrollY to 0 at the bottom.
- * Header gap is filled with a non-scrolling cap instead.
+ * Track starts at the top (aligned with «Задача» header) so no blank gap appears
+ * between the header and the shell edge. Scroll math stays:
+ *   viewport = header + body, content = header + tasks
+ *   ⇒ maxScroll = tasks − body (same as library panes).
  */
-.gantt-shell.is-fixed-window.is-v-scroll ._3eULf::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: 0;
-  width: var(--gantt-v-scroll-width, 12px);
-  height: var(--gantt-header-height, 32px);
-  box-sizing: border-box;
-  background: var(--background);
-  border-right: 1px solid var(--border);
-  z-index: 26;
-  pointer-events: none;
-}
-
 .gantt-shell.is-fixed-window ._1eT-t {
   display: none;
   position: absolute !important;
-  top: var(--gantt-header-height, 32px) !important;
+  top: 0 !important;
   left: 0 !important;
   right: auto !important;
   margin: 0 !important;
   width: var(--gantt-v-scroll-width, 12px) !important;
-  height: var(--gantt-body-height, 0px) !important;
+  height: calc(
+    var(--gantt-header-height, 32px) + var(--gantt-body-height, 0px)
+  ) !important;
   box-sizing: border-box;
   overflow-x: hidden !important;
   overflow-y: auto !important;
@@ -244,9 +232,11 @@
   display: block !important;
 }
 
-/* Spacer height = ganttFullHeight (tasks only) — do not add headerHeight here. */
+/* Spacer: header offset + task rows — keeps maxScroll = tasks − body. */
 .gantt-shell.is-fixed-window ._1eT-t > div {
-  height: var(--gantt-tasks-height, 0px) !important;
+  height: calc(
+    var(--gantt-header-height, 32px) + var(--gantt-tasks-height, 0px)
+  ) !important;
   width: 1px !important;
 }
 
