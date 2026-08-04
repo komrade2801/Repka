@@ -161,16 +161,13 @@ Append уникальных по `title` (без учёта регистра):
 
 `app/agent.py` — `run_chat(message, history, db, settings)`:
 
-1. Читает все задачи, вставляет markdown-таблицу в **system prompt** (`format_tasks_for_prompt`, колонки включают `priority`).
-2. Собирает messages: system + history + текущее user-сообщение.
-3. Берёт схемы tools из MCP (`mcp.list_tools()`), маппит в OpenAI function tools.
-4. Биндит DB-сессию через `set_tool_db` (ContextVar) на время цикла.
-5. До **6** раундов (`MAX_TOOL_ROUNDS`): completion → при tool_calls вызывает `mcp.call_tool` → результат в role `tool` → снова LLM.
-6. Возвращает `(reply_text, tools_used)`.
+1. System prompt: МСК-дата; **без** полного снимка задач; grounding (свежий search перед мутациями).
+2. Messages: system + history (`user`/`assistant`) + текущее сообщение; перед LLM — tool stripping (старше 2 раундов).
+3. Схемы tools из MCP → OpenAI function tools; `set_tool_db` на время цикла.
+4. До **6** раундов: completion → `mcp.call_tool` → role `tool` → снова LLM.
+5. Ответ: `(reply_text, tools_used)`.
 
-Системный промпт: роль «Repka», резолв по ID/title, ответ на языке пользователя. Tools: аналитика/поиск + move/assign/create/delete, duration/priority, add/remove dependency.
-
-Клиент: `AsyncOpenAI` → OpenRouter (`HTTP-Referer` / `X-Title`).
+Tools: аналитика/поиск + move/assign/create/delete, duration/priority, add/remove dependency. Клиент: `AsyncOpenAI` → OpenRouter.
 
 ## MCP Tools
 
