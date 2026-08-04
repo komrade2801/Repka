@@ -60,6 +60,40 @@ type HoverTip = {
   lines: string[]
 }
 
+const TIP_GAP = 12
+const TIP_PAD = 8
+
+/** Prefer below-right of the cursor; flip/clamp when the viewport is tight. */
+function fitHoverTip(
+  clientX: number,
+  clientY: number,
+  width: number,
+  height: number,
+): { left: number; top: number } {
+  const vw = window.innerWidth
+  const vh = window.innerHeight
+
+  let left = clientX + TIP_GAP
+  if (left + width > vw - TIP_PAD) {
+    left = clientX - TIP_GAP - width
+  }
+  if (left < TIP_PAD) left = TIP_PAD
+  if (left + width > vw - TIP_PAD) {
+    left = Math.max(TIP_PAD, vw - TIP_PAD - width)
+  }
+
+  let top = clientY + TIP_GAP
+  if (top + height > vh - TIP_PAD) {
+    top = clientY - TIP_GAP - height
+  }
+  if (top < TIP_PAD) top = TIP_PAD
+  if (top + height > vh - TIP_PAD) {
+    top = Math.max(TIP_PAD, vh - TIP_PAD - height)
+  }
+
+  return { left, top }
+}
+
 /** Library TooltipContent — unused; scroll-linked wrapper is hidden via CSS. */
 function EmptyGanttTooltip() {
   return null
@@ -606,6 +640,7 @@ export function GanttChart({
   const shellRef = useRef<HTMLDivElement>(null)
   /** Flex area that defines the max shell height (shell itself may hug content). */
   const viewportRef = useRef<HTMLDivElement>(null)
+  const tipRef = useRef<HTMLDivElement>(null)
   const columnsMenuRef = useRef<HTMLDivElement>(null)
   const resizeDrag = useRef<{ startX: number; startWidth: number } | null>(null)
   const setSelectedTaskId = useUiStore((state) => state.setSelectedTaskId)
@@ -1189,6 +1224,20 @@ export function GanttChart({
     visibleGanttTasks.length,
   ])
 
+  // Space-aware fixed tooltip: measure after commit, flip when edges are tight.
+  useLayoutEffect(() => {
+    const el = tipRef.current
+    if (!hoverTip || !el) return
+    const { left, top } = fitHoverTip(
+      hoverTip.clientX,
+      hoverTip.clientY,
+      el.offsetWidth,
+      el.offsetHeight,
+    )
+    el.style.left = `${left}px`
+    el.style.top = `${top}px`
+  }, [hoverTip])
+
   // Fixed cursor tooltip — library tip is scroll-linked and jitters with pad lock / wheel.
   useEffect(() => {
     const shell = shellRef.current
@@ -1570,11 +1619,12 @@ export function GanttChart({
 
       {hoverTip ? (
         <div
+          ref={tipRef}
           role="tooltip"
           className="pointer-events-none fixed z-50 max-w-sm rounded-md border border-border bg-background px-3 py-2 text-xs shadow-md"
           style={{
-            left: hoverTip.clientX + 12,
-            top: hoverTip.clientY + 12,
+            left: hoverTip.clientX + TIP_GAP,
+            top: hoverTip.clientY + TIP_GAP,
           }}
         >
           <div className="font-medium leading-snug text-foreground">
