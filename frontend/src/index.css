@@ -1,0 +1,387 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/geist";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+    --font-heading: var(--font-sans);
+    --font-sans: "Geist Variable", "Inter", system-ui, sans-serif;
+    --color-sidebar-ring: var(--sidebar-ring);
+    --color-sidebar-border: var(--sidebar-border);
+    --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+    --color-sidebar-accent: var(--sidebar-accent);
+    --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+    --color-sidebar-primary: var(--sidebar-primary);
+    --color-sidebar-foreground: var(--sidebar-foreground);
+    --color-sidebar: var(--sidebar);
+    --color-chart-5: var(--chart-5);
+    --color-chart-4: var(--chart-4);
+    --color-chart-3: var(--chart-3);
+    --color-chart-2: var(--chart-2);
+    --color-chart-1: var(--chart-1);
+    --color-ring: var(--ring);
+    --color-input: var(--input);
+    --color-border: var(--border);
+    --color-destructive: var(--destructive);
+    --color-accent-foreground: var(--accent-foreground);
+    --color-accent: var(--accent);
+    --color-muted-foreground: var(--muted-foreground);
+    --color-muted: var(--muted);
+    --color-secondary-foreground: var(--secondary-foreground);
+    --color-secondary: var(--secondary);
+    --color-primary-foreground: var(--primary-foreground);
+    --color-primary: var(--primary);
+    --color-popover-foreground: var(--popover-foreground);
+    --color-popover: var(--popover);
+    --color-card-foreground: var(--card-foreground);
+    --color-card: var(--card);
+    --color-foreground: var(--foreground);
+    --color-background: var(--background);
+    --radius-sm: calc(var(--radius) * 0.6);
+    --radius-md: calc(var(--radius) * 0.8);
+    --radius-lg: var(--radius);
+    --radius-xl: calc(var(--radius) * 1.4);
+    --radius-2xl: calc(var(--radius) * 1.8);
+    --radius-3xl: calc(var(--radius) * 2.2);
+    --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+:root {
+    /* BIOCAD-inspired: white canvas, near-black type, restrained neutrals */
+    --background: #ffffff;
+    --foreground: #111111;
+    --card: #ffffff;
+    --card-foreground: #111111;
+    --popover: #ffffff;
+    --popover-foreground: #111111;
+    --primary: #111111;
+    --primary-foreground: #ffffff;
+    --secondary: #f5f5f5;
+    --secondary-foreground: #111111;
+    --muted: #f5f5f5;
+    --muted-foreground: #6b6b6b;
+    --accent: #f5f5f5;
+    --accent-foreground: #111111;
+    --destructive: #c62828;
+    --border: #e6e6e6;
+    --input: #e6e6e6;
+    --ring: #111111;
+    --chart-1: #111111;
+    --chart-2: #4a4a4a;
+    --chart-3: #6b6b6b;
+    --chart-4: #9a9a9a;
+    --chart-5: #c4c4c4;
+    --radius: 0.3rem;
+    --sidebar: #ffffff;
+    --sidebar-foreground: #111111;
+    --sidebar-primary: #111111;
+    --sidebar-primary-foreground: #ffffff;
+    --sidebar-accent: #f5f5f5;
+    --sidebar-accent-foreground: #111111;
+    --sidebar-border: #e6e6e6;
+    --sidebar-ring: #111111;
+}
+
+.dark {
+    --background: #ffffff;
+    --foreground: #111111;
+    --card: #ffffff;
+    --card-foreground: #111111;
+    --popover: #ffffff;
+    --popover-foreground: #111111;
+    --primary: #111111;
+    --primary-foreground: #ffffff;
+    --secondary: #f5f5f5;
+    --secondary-foreground: #111111;
+    --muted: #f5f5f5;
+    --muted-foreground: #6b6b6b;
+    --accent: #f5f5f5;
+    --accent-foreground: #111111;
+    --destructive: #c62828;
+    --border: #e6e6e6;
+    --input: #e6e6e6;
+    --ring: #111111;
+    --chart-1: #111111;
+    --chart-2: #4a4a4a;
+    --chart-3: #6b6b6b;
+    --chart-4: #9a9a9a;
+    --chart-5: #c4c4c4;
+    --sidebar: #ffffff;
+    --sidebar-foreground: #111111;
+    --sidebar-primary: #111111;
+    --sidebar-primary-foreground: #ffffff;
+    --sidebar-accent: #f5f5f5;
+    --sidebar-accent-foreground: #111111;
+    --sidebar-border: #e6e6e6;
+    --sidebar-ring: #111111;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html,
+  body,
+  #root {
+    height: 100%;
+    overflow: hidden;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-weight: 400;
+  }
+  html {
+    @apply font-sans;
+  }
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    font-weight: 500;
+  }
+}
+
+/* gantt-task-react: list cell padding */
+.gantt-shell ._WuQ0f,
+.gantt-shell ._3lLk3 {
+  padding-inline: 0.5rem !important;
+}
+
+.gantt-shell ._3eULf {
+  width: 100% !important;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.gantt-shell ._CZjuD {
+  overflow: hidden;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* Fixed day/week/month window: timeline pane = exact remaining shell width */
+.gantt-shell.is-fixed-window ._CZjuD {
+  position: relative;
+  z-index: 2;
+  flex: 0 0 auto !important;
+  width: var(--gantt-timeline-width, calc(var(--gantt-cols, 7) * var(--gantt-col-width, 80px))) !important;
+  max-width: var(--gantt-timeline-width, calc(var(--gantt-cols, 7) * var(--gantt-col-width, 80px))) !important;
+  /* Never scroll inside timeline — pad/ghost columns stay clipped */
+  overflow: hidden !important;
+  overscroll-behavior: contain;
+}
+
+.gantt-shell.is-fixed-window.is-list-collapsed ._CZjuD {
+  flex: 1 1 auto !important;
+  width: var(--gantt-timeline-width, calc(var(--gantt-cols, 7) * var(--gantt-col-width, 80px))) !important;
+  max-width: 100% !important;
+}
+
+.gantt-shell.is-fixed-window.is-list-collapsed ._3eULf {
+  width: 100% !important;
+  max-width: 100% !important;
+}
+
+.gantt-shell.is-fixed-window ._CZjuD > svg:first-child {
+  visibility: hidden;
+}
+
+/* Let PeriodBodyGrid show through empty cells; opaque bars cover lines */
+.gantt-shell.is-fixed-window ._2dZTy {
+  fill: transparent !important;
+}
+
+.gantt-shell.is-fixed-window ._2k9Ys {
+  display: none !important;
+}
+
+/*
+ * Vertical scrollbar strip on the left.
+ * Scroll math MUST match gantt-task-react: viewport = body, content = tasks
+ * (maxScroll = tasksHeight − bodyHeight). Extending both by headerHeight looked
+ * continuous but raced ignoreScrollEvent and teleported scrollY to 0 at the bottom.
+ * Header gap is filled with a non-scrolling cap instead.
+ */
+.gantt-shell.is-fixed-window.is-v-scroll ._3eULf::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: var(--gantt-v-scroll-width, 12px);
+  height: var(--gantt-header-height, 25px);
+  box-sizing: border-box;
+  background: var(--background);
+  border-right: 1px solid var(--border);
+  z-index: 26;
+  pointer-events: none;
+}
+
+.gantt-shell.is-fixed-window ._1eT-t {
+  display: none;
+  position: absolute !important;
+  top: var(--gantt-header-height, 25px) !important;
+  left: 0 !important;
+  right: auto !important;
+  margin: 0 !important;
+  width: var(--gantt-v-scroll-width, 12px) !important;
+  height: var(--gantt-body-height, 0px) !important;
+  box-sizing: border-box;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  overscroll-behavior: none;
+  background: var(--background);
+  border-right: 1px solid var(--border);
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklab, var(--foreground) 25%, transparent) transparent;
+  z-index: 25;
+}
+
+.gantt-shell.is-fixed-window.is-v-scroll ._1eT-t {
+  display: block !important;
+}
+
+/* Spacer height = ganttFullHeight (tasks only) — do not add headerHeight here. */
+.gantt-shell.is-fixed-window ._1eT-t > div {
+  height: var(--gantt-tasks-height, 0px) !important;
+  width: 1px !important;
+}
+
+/* Shift list + timeline right of the scrollbar strip. */
+.gantt-shell.is-fixed-window.is-v-scroll ._3eULf {
+  padding-left: var(--gantt-v-scroll-width, 12px) !important;
+  box-sizing: border-box !important;
+}
+
+.gantt-shell.is-fixed-window ._1eT-t::-webkit-scrollbar {
+  width: var(--gantt-v-scroll-width, 12px);
+}
+
+.gantt-shell.is-fixed-window ._1eT-t::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  background: color-mix(in oklab, var(--foreground) 25%, transparent);
+  background-clip: padding-box;
+  border-radius: 999px;
+}
+
+.gantt-shell.is-fixed-window ._1eT-t::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in oklab, var(--foreground) 40%, transparent);
+  background-clip: padding-box;
+  border: 2px solid transparent;
+}
+
+.gantt-shell.is-fixed-window ._1eT-t::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Keep task-list width stable so timeline left edge is predictable */
+.gantt-shell.is-fixed-window ._3_ygE,
+.gantt-shell.is-fixed-window ._3ZbQT {
+  display: flex !important;
+  flex-direction: column !important;
+  width: var(--gantt-list-width, 280px) !important;
+  min-width: var(--gantt-list-width, 280px) !important;
+  max-width: var(--gantt-list-width, 280px) !important;
+  box-sizing: border-box;
+  border: none !important;
+  background: var(--background);
+}
+
+.gantt-shell.is-fixed-window ._1nBOt {
+  border: none !important;
+}
+
+.gantt-shell.is-fixed-window ._34SS0 {
+  display: flex !important;
+  align-items: center !important;
+  border: none !important;
+  background: transparent !important;
+  box-sizing: border-box;
+}
+
+.gantt-shell.is-fixed-window ._34SS0:nth-of-type(even) {
+  background: transparent !important;
+}
+
+.gantt-shell.is-fixed-window ._2eZzQ {
+  display: none !important;
+}
+
+.gantt-shell.is-fixed-window ._WuQ0f,
+.gantt-shell.is-fixed-window ._3lLk3 {
+  display: flex !important;
+  align-items: center !important;
+  border: none !important;
+  box-sizing: border-box;
+  overflow: hidden !important;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding-inline: 0.5rem !important;
+}
+
+.gantt-shell.is-fixed-window ._WuQ0f.is-dates-col,
+.gantt-shell.is-fixed-window ._3lLk3.is-dates-col {
+  min-width: 88px;
+}
+
+.gantt-shell.is-list-collapsed ._3_ygE,
+.gantt-shell.is-list-collapsed ._3ZbQT {
+  display: none !important;
+}
+
+.gantt-shell.is-fixed-window ._2TfEi {
+  padding-left: 0 !important;
+  width: 0 !important;
+  overflow: hidden;
+}
+
+.gantt-shell.is-fixed-window ._2QjE6 {
+  padding: 0.15rem !important;
+}
+
+/* Align header rules; hide library ticks — body uses PeriodBodyGrid for full window */
+.gantt-shell.is-fixed-window ._RuwuK {
+  visibility: hidden;
+}
+
+/* Library tooltip is absolutely positioned from scrollX/scrollY and jitters;
+   we render a fixed cursor tip in gantt-chart.tsx instead. */
+.gantt-shell ._25P-K,
+.gantt-shell ._3gVAq {
+  display: none !important;
+}
+
+/*
+ * Bar labels: name lives in the task list + hover tip.
+ * Outside labels collide with dependency arrows; hide all chart text labels.
+ */
+.gantt-shell ._3zRJQ,
+.gantt-shell ._3KcaM {
+  display: none !important;
+}
+
+/* Subtle inset from grid lines without eating bar thickness */
+.gantt-shell ._31ERP {
+  stroke: var(--background) !important;
+  stroke-width: 3 !important;
+  vector-effect: non-scaling-stroke;
+}
+
+/*
+ * Horizontal scroll only on the shell when the fixed window no longer fits
+ * (typically month + AI chat). Timeline keeps overflow:hidden so the library
+ * pad day cannot be revealed.
+ */
+.gantt-shell.is-fixed-window.is-h-scroll {
+  overflow-x: auto !important;
+  overscroll-behavior-x: contain;
+}
+
+.gantt-shell.is-fixed-window.is-h-scroll ._3eULf {
+  width: max-content !important;
+  max-width: none !important;
+  overflow: visible !important;
+}
