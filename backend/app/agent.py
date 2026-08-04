@@ -3,41 +3,113 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from openai import AsyncOpenAI
 from sqlalchemy.orm import Session
 
 from app.config import Settings
 from app.mcp_tools import (
-    format_tasks_for_prompt,
+    format_date_ddmmyy,
     mcp,
     reset_tool_db,
     set_tool_db,
     tool_result_text,
 )
-from app.models import Task
+
+_MSK = ZoneInfo("Europe/Moscow")
+_WEEKDAYS_RU = (
+    "понедельник",
+    "вторник",
+    "среда",
+    "четверг",
+    "пятница",
+    "суббота",
+    "воскресенье",
+)
 
 SYSTEM_PROMPT = """\
 You are Repka — an AI assistant for a Gantt chart project planner.
 
-You help users rearrange the schedule by calling tools when needed:
-- move_task(task_id, new_start_date) — change a task's start date (YYYY-MM-DD)
-- assign_task(task_id, assignee) — set the assignee
-- add_dependency(task_id, predecessor_id) — make task wait for another task
+Current date/time (Europe/Moscow): {today} ({weekday_ru}), local time {now_time}.
+Resolve relative phrases like «сегодня», «завтра», «послезавтра», «до конца недели», «на следующей неделе» into concrete dates dd.mm.yy using this clock. Week starts on Monday. Always pass dates to tools as dd.mm.yy (e.g. 05.08.26).
+
+There is NO full task list in this prompt. Discover tasks only via tools.
+
+Read-only tools:
+- get_project_summary(assignee?, priority?) — SQL aggregates: total, by assignee, by priority
+- search_tasks(query?, assignee?, priority?, start_from?, start_to?, finish_from?, finish_to?, limit=10) — SQL filter by text / assignee / priority / start & finish date ranges (dates dd.mm.yy; finish = start_date + duration days)
+
+Mutation tools:
+- move_task(task_id, new_start_date) — change start date (dd.mm.yy)
+- assign_task(task_id, assignee) — set or clear assignee
+- add_dependency(task_id, predecessor_id) — FS predecessor link
+- remove_dependency(task_id, predecessor_id) — remove predecessor
+- create_task(title, start_date, duration=1, …) — create task (start_date dd.mm.yy)
+- delete_task(task_id) — delete + clean dependency refs
+- update_task_duration(task_id, duration) — duration in days
+- update_task_priority(task_id, priority) — Критический/Высокий/Средний/Низкий/Опционально
 
 Rules:
-1. Always resolve tasks by the IDs from the current task list below.
-2. If the user refers to a task by title, find the matching id first.
-3. Prefer calling tools over inventing changes. Do not claim you changed data unless a tool succeeded.
-4. After tools run, briefly confirm what changed in Russian (or the user's language).
-5. If the request is ambiguous or a task is missing, ask a short clarifying question.
-6. Do not invent new tasks or delete tasks — only the listed tools are available.
-
-{task_snapshot}
+1. Grounding: NEVER trust task IDs, titles, assignees, dates, or counts from earlier chat turns or stale tool output — the plan may have changed in the UI. Before any mutation, always call search_tasks (or get_project_summary for stats) to obtain fresh IDs and state in this turn.
+2. For counts, load, or «сколько…» — get_project_summary. For «найди / что делает / просроченные / на этой неделе…» — search_tasks (use date range filters).
+3. Prefer tools over inventing changes. Do not claim success unless a tool succeeded.
+4. After tools, briefly confirm in the user's language (usually Russian).
+5. If ambiguous or missing, ask a short clarifying question.
+6. Only listed tools. Dependencies: no self-links, no cycles, predecessors must exist.
+7. Do not auto-shift dates on add_dependency unless the user asks to move a task.
+8. Formatting: for analytics, stats, comparisons, and multi-item results use GitHub-flavored Markdown tables with real newlines (each row on its own line). Example:
+| Исполнитель | Задач |
+| --- | --- |
+| Иванова Анна | 25 |
+Never squash a table into one line. Prefer a short intro sentence, then the table. Use bullet lists only for 1–3 simple items.
 """
 
 MAX_TOOL_ROUNDS = 6
+# Keep full tool payloads only for the last N assistant tool-call rounds in the LLM context.
+KEEP_TOOL_RESULT_ROUNDS = 2
+_STALE_TOOL_PLACEHOLDER = (
+    "[cleared: stale tool result — call search_tasks or get_project_summary for current data]"
+)
+
+
+def _moscow_clock() -> dict[str, str]:
+    now = datetime.now(_MSK)
+    return {
+        "today": format_date_ddmmyy(now.date()),
+        "weekday_ru": _WEEKDAYS_RU[now.weekday()],
+        "now_time": now.strftime("%H:%M"),
+    }
+
+
+def _strip_stale_tool_results(
+    messages: list[dict[str, Any]],
+    *,
+    keep_rounds: int = KEEP_TOOL_RESULT_ROUNDS,
+) -> None:
+    """Compress tool payloads older than the last `keep_rounds` tool-call rounds (in-place).
+
+    Keeps message structure (assistant tool_calls + matching tool messages) valid for the
+    OpenAI API while dropping bulky stale results so the model re-fetches via search tools.
+    """
+    if keep_rounds < 0:
+        return
+
+    round_starts = [
+        i
+        for i, msg in enumerate(messages)
+        if msg.get("role") == "assistant" and msg.get("tool_calls")
+    ]
+    if len(round_starts) <= keep_rounds:
+        return
+
+    keep_from = round_starts[-keep_rounds] if keep_rounds else len(messages)
+    for i in range(keep_from):
+        msg = messages[i]
+        if msg.get("role") == "tool" and msg.get("content") != _STALE_TOOL_PLACEHOLDER:
+            msg["content"] = _STALE_TOOL_PLACEHOLDER
 
 
 def _openai_tools(mcp_tools: list[Any]) -> list[dict[str, Any]]:
@@ -79,8 +151,7 @@ async def run_chat(
     settings: Settings,
 ) -> tuple[str, list[str]]:
     """Run an LLM turn with MCP tools. Returns (reply_text, tools_used)."""
-    tasks = db.query(Task).order_by(Task.id).all()
-    system = SYSTEM_PROMPT.format(task_snapshot=format_tasks_for_prompt(tasks))
+    system = SYSTEM_PROMPT.format(**_moscow_clock())
 
     messages: list[dict[str, Any]] = [{"role": "system", "content": system}]
     for item in history:
@@ -98,6 +169,7 @@ async def run_chat(
     token = set_tool_db(db)
     try:
         for _ in range(MAX_TOOL_ROUNDS):
+            _strip_stale_tool_results(messages)
             completion = await client.chat.completions.create(
                 model=settings.openrouter_model,
                 messages=messages,

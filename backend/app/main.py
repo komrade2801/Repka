@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app import models  # noqa: F401 — register models with metadata
 from app.config import get_settings
 from app.database import Base, engine, ensure_sqlite_columns
+from app.rate_limit import RateLimitMiddleware
 from app.routers import chat, tasks
 
 settings = get_settings()
@@ -13,6 +14,7 @@ ensure_sqlite_columns()
 
 app = FastAPI(title="Repka API", version="0.1.0")
 
+app.add_middleware(RateLimitMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,

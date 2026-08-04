@@ -50,13 +50,20 @@ def normalize_priority(value: str | int | float | None) -> TaskPriorityLiteral:
     )
 
 
+def _empty_str_to_none(value: str | None) -> str | None:
+    if value is None:
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
 class TaskBase(BaseModel):
-    title: str = Field(..., min_length=1, max_length=255)
-    description: str | None = None
-    assignee: str | None = None
+    title: str = Field(..., min_length=1, max_length=80)
+    description: str | None = Field(default=None, max_length=500)
+    assignee: str | None = Field(default=None, max_length=60)
     start_date: date
-    duration: int = Field(..., ge=1)
-    predecessors: str | None = None
+    duration: int = Field(..., ge=1, le=3650)
+    predecessors: str | None = Field(default=None, max_length=255)
     priority: TaskPriorityLiteral = "Средний"
 
     @field_validator("priority", mode="before")
@@ -66,13 +73,72 @@ class TaskBase(BaseModel):
     ) -> TaskPriorityLiteral:
         return normalize_priority(value)
 
+    @field_validator("title", mode="before")
+    @classmethod
+    def _strip_title(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip()
+        return value
+
+    @field_validator("description", "assignee", "predecessors", mode="before")
+    @classmethod
+    def _blank_optional(cls, value: object) -> object:
+        if isinstance(value, str):
+            return _empty_str_to_none(value)
+        return value
+
 
 class TaskCreate(TaskBase):
     pass
 
 
-class TaskBulkCreate(BaseModel):
-    tasks: list[TaskCreate] = Field(..., min_length=1)
+class TaskUpdate(BaseModel):
+    """Partial update — all fields optional."""
+
+    title: str | None = Field(default=None, min_length=1, max_length=80)
+    description: str | None = Field(default=None, max_length=500)
+    assignee: str | None = Field(default=None, max_length=60)
+    start_date: date | None = None
+    duration: int | None = Field(default=None, ge=1, le=3650)
+    predecessors: str | None = Field(default=None, max_length=255)
+    priority: TaskPriorityLiteral | None = None
+
+    @field_validator("priority", mode="before")
+    @classmethod
+    def _normalize_priority(
+        cls, value: str | int | float | None
+    ) -> TaskPriorityLiteral | None:
+        if value is None:
+            return None
+        return normalize_priority(value)
+
+    @field_validator("title", mode="before")
+    @classmethod
+    def _strip_title(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip()
+        return value
+
+    @field_validator("description", "assignee", "predecessors", mode="before")
+    @classmethod
+    def _blank_optional(cls, value: object) -> object:
+        if isinstance(value, str):
+            return _empty_str_to_none(value)
+        return value
+
+
+class TaskImportRequest(BaseModel):
+    tasks: list[TaskCreate] = Field(..., min_length=1, max_length=5000)
+
+
+class TaskImportSkipped(BaseModel):
+    title: str
+    reason: str
+
+
+class TaskImportResult(BaseModel):
+    created: list["TaskRead"]
+    skipped: list[TaskImportSkipped]
 
 
 class TaskRead(TaskBase):
@@ -83,14 +149,18 @@ class TaskRead(TaskBase):
 
 class ChatHistoryMessage(BaseModel):
     role: Literal["user", "assistant"]
-    content: str = Field(..., min_length=1)
+    content: str = Field(..., min_length=1, max_length=20_000)
 
 
 class ChatRequest(BaseModel):
-    message: str = Field(..., min_length=1)
-    history: list[ChatHistoryMessage] = Field(default_factory=list)
+    message: str = Field(..., min_length=1, max_length=8000)
+    history: list[ChatHistoryMessage] = Field(default_factory=list, max_length=50)
 
 
 class ChatResponse(BaseModel):
     reply: str
     tools_used: list[str] = Field(default_factory=list)
+
+
+# Resolve forward ref for TaskImportResult.created
+TaskImportResult.model_rebuild()

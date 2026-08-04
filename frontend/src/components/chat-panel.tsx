@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import axios from "axios"
-import { Loader2, MessageSquare, SendHorizontal, X } from "lucide-react"
+import { CircleHelp, Loader2, MessageSquare, SendHorizontal, X } from "lucide-react"
 import Markdown from "react-markdown"
+import remarkGfm from "remark-gfm"
 import { toast } from "sonner"
 
 import { sendChatMessage } from "@/api/chat"
@@ -26,6 +27,41 @@ function chatErrorMessage(error: unknown): string {
 
 const TASKS_KEY = ["tasks"] as const
 
+const CHAT_PLACEHOLDER =
+  "Например: создай задачу «Ревью», перенеси на понедельник, назначь Анне…"
+
+const CHAT_EMPTY_HINT =
+  "Могу создать и удалить задачи, сдвинуть сроки, сменить длительность и приоритет, назначить исполнителя, добавить или убрать зависимости. Нажмите «Справка» для примеров."
+
+const ASSISTANT_HELP = `### Справка по ассистенту Repka
+
+Я меняю план на диаграмме Ганта через инструменты. Можно просить по **названию** или **ID** задачи.
+
+**Что умею**
+- **Создать задачу** — название, дата начала, длительность, приоритет, исполнитель
+- **Удалить задачу** — ссылки на неё в зависимостях очистятся
+- **Перенести** — новая дата начала (\`дд.мм.гг\` или «на понедельник»)
+- **Длительность** — сколько дней занимает задача
+- **Приоритет** — Критический / Высокий / Средний / Низкий / Опционально
+- **Исполнитель** — назначить или снять
+- **Зависимости** — добавить или убрать предшественника (без циклов)
+
+**Примеры**
+- «Создай задачу „Интеграция API“ на 10 августа, 5 дней, приоритет Высокий»
+- «Перенеси „Аналитика“ на 2026-08-15»
+- «Назначь задачу 42 на Ивана»
+- «Сделай длительность „Дизайн“ 3 дня»
+- «Поставь приоритет Критический для „Релиз“»
+- «Пусть „Тесты“ зависят от „Разработка“»
+- «Убери зависимость задачи 15 от 8»
+- «Удали задачу „Черновик“»
+
+**Ограничения**
+- Не двигаю даты автоматически только из‑за новой зависимости — попросите перенести отдельно
+- Уточню, если задача неоднозначна или не найдена
+
+После изменений Гантт обновится сам.`
+
 function nextId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`
 }
@@ -38,43 +74,69 @@ function toHistory(messages: { role: "user" | "assistant"; content: string; isEr
 
 function AssistantMarkdown({ content }: { content: string }) {
   return (
-    <Markdown
-      components={{
-        p: ({ children }) => <p className="mb-2 last:mb-0 leading-relaxed">{children}</p>,
-        ul: ({ children }) => (
-          <ul className="mb-2 list-disc space-y-1 pl-4 last:mb-0">{children}</ul>
-        ),
-        ol: ({ children }) => (
-          <ol className="mb-2 list-decimal space-y-1 pl-4 last:mb-0">{children}</ol>
-        ),
-        li: ({ children }) => <li className="leading-relaxed">{children}</li>,
-        strong: ({ children }) => (
-          <strong className="font-medium text-foreground">{children}</strong>
-        ),
-        code: ({ children }) => (
-          <code className="rounded-sm bg-muted px-1 py-0.5 font-mono text-[0.8em]">
-            {children}
-          </code>
-        ),
-        pre: ({ children }) => (
-          <pre className="mb-2 overflow-x-auto rounded-md bg-muted p-2 font-mono text-xs last:mb-0">
-            {children}
-          </pre>
-        ),
-        a: ({ href, children }) => (
-          <a
-            href={href}
-            className="underline underline-offset-2 hover:text-foreground"
-            target="_blank"
-            rel="noreferrer"
-          >
-            {children}
-          </a>
-        ),
-      }}
-    >
-      {content}
-    </Markdown>
+    <div className="min-w-0 overflow-hidden [&_:first-child]:mt-0 [&_:last-child]:mb-0">
+      <Markdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          p: ({ children }) => <p className="mb-2 last:mb-0 leading-relaxed">{children}</p>,
+          h3: ({ children }) => (
+            <h3 className="mb-2 text-sm font-medium text-foreground">{children}</h3>
+          ),
+          ul: ({ children }) => (
+            <ul className="mb-2 list-disc space-y-1 pl-4 last:mb-0">{children}</ul>
+          ),
+          ol: ({ children }) => (
+            <ol className="mb-2 list-decimal space-y-1 pl-4 last:mb-0">{children}</ol>
+          ),
+          li: ({ children }) => <li className="leading-relaxed">{children}</li>,
+          strong: ({ children }) => (
+            <strong className="font-medium text-foreground">{children}</strong>
+          ),
+          code: ({ children }) => (
+            <code className="rounded-sm bg-muted px-1 py-0.5 font-mono text-[0.8em]">
+              {children}
+            </code>
+          ),
+          pre: ({ children }) => (
+            <pre className="mb-2 max-w-full overflow-x-auto rounded-md bg-background/60 p-2 font-mono text-xs last:mb-0">
+              {children}
+            </pre>
+          ),
+          a: ({ href, children }) => (
+            <a
+              href={href}
+              className="underline underline-offset-2 hover:text-foreground"
+              target="_blank"
+              rel="noreferrer"
+            >
+              {children}
+            </a>
+          ),
+          table: ({ children }) => (
+            <div className="mb-2 max-w-full overflow-x-auto rounded-md border border-border/60 last:mb-0">
+              <table className="w-max min-w-full border-collapse text-left text-xs">
+                {children}
+              </table>
+            </div>
+          ),
+          thead: ({ children }) => (
+            <thead className="bg-background/70 text-muted-foreground">{children}</thead>
+          ),
+          tbody: ({ children }) => <tbody>{children}</tbody>,
+          tr: ({ children }) => (
+            <tr className="border-b border-border/50 last:border-b-0">{children}</tr>
+          ),
+          th: ({ children }) => (
+            <th className="whitespace-nowrap px-2.5 py-1.5 font-medium">{children}</th>
+          ),
+          td: ({ children }) => (
+            <td className="whitespace-nowrap px-2.5 py-1.5 align-top">{children}</td>
+          ),
+        }}
+      >
+        {content}
+      </Markdown>
+    </div>
   )
 }
 
@@ -131,6 +193,14 @@ export function ChatPanel({ className }: ChatPanelProps) {
     chatMutation.mutate({ message: text, history })
   }
 
+  const showHelp = () => {
+    addMessage({
+      id: nextId(),
+      role: "assistant",
+      content: ASSISTANT_HELP,
+    })
+  }
+
   const onSubmit = (event: FormEvent) => {
     event.preventDefault()
     submit()
@@ -170,8 +240,7 @@ export function ChatPanel({ className }: ChatPanelProps) {
         <div className="flex flex-col gap-3 px-3 py-3">
           {messages.length === 0 ? (
             <p className="px-1 py-6 text-center text-sm text-muted-foreground">
-              Спросите ассистента перенести задачу, назначить исполнителя или
-              добавить зависимость — изменения появятся на Ганте.
+              {CHAT_EMPTY_HINT}
             </p>
           ) : null}
 
@@ -179,7 +248,7 @@ export function ChatPanel({ className }: ChatPanelProps) {
             <div
               key={msg.id}
               className={cn(
-                "max-w-[92%] rounded-md px-3 py-2 text-sm",
+                "max-w-[92%] min-w-0 overflow-hidden rounded-md px-3 py-2 text-sm",
                 msg.role === "user"
                   ? "ml-auto bg-primary text-primary-foreground"
                   : msg.isError
@@ -219,12 +288,23 @@ export function ChatPanel({ className }: ChatPanelProps) {
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={onKeyDown}
-          placeholder="Например: перенеси «Аналитика» на 10 августа…"
+          placeholder={CHAT_PLACEHOLDER}
           disabled={chatMutation.isPending}
+          maxLength={8000}
           className="min-h-18 max-h-36 resize-none"
           rows={3}
         />
-        <div className="flex justify-end">
+        <div className="flex justify-end gap-2">
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={chatMutation.isPending}
+            onClick={showHelp}
+          >
+            <CircleHelp data-icon="inline-start" />
+            Справка
+          </Button>
           <Button
             type="submit"
             size="sm"

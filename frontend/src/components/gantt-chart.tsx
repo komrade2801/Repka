@@ -14,6 +14,7 @@ import {
   Columns3,
   PanelLeftClose,
   PanelLeftOpen,
+  Plus,
   User,
 } from "lucide-react"
 import { Gantt, ViewMode, type Task as GanttTask } from "gantt-task-react"
@@ -645,6 +646,7 @@ export function GanttChart({
   const resizeDrag = useRef<{ startX: number; startWidth: number } | null>(null)
   const setSelectedTaskId = useUiStore((state) => state.setSelectedTaskId)
   const selectedTaskId = useUiStore((state) => state.selectedTaskId)
+  const openCreateTask = useUiStore((state) => state.openCreateTask)
   const [hoverTip, setHoverTip] = useState<HoverTip | null>(null)
 
   /** Only month may H-scroll when chat compresses; day/week always fit-resize. */
@@ -1508,6 +1510,17 @@ export function GanttChart({
               </div>
             ) : null}
           </div>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            aria-label="Создать задачу"
+            title="Создать задачу"
+            onClick={() => openCreateTask()}
+          >
+            <Plus data-icon="inline-start" />
+            Создать
+          </Button>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">

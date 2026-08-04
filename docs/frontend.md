@@ -11,7 +11,7 @@ SPA Repka: импорт Excel, диаграмма Ганта, чат с AI и д
 | Данные | TanStack Query 5, axios, Zustand |
 | Excel | xlsx (SheetJS), zod |
 | Гантт | gantt-task-react |
-| Чат / формы | react-markdown, react-hook-form |
+| Чат / формы | react-markdown + remark-gfm, react-hook-form |
 
 Скрипты (`frontend/package.json`):
 
@@ -31,11 +31,12 @@ npm run preview  # превью production-сборки
 `src/App.tsx`:
 
 - `useQuery(['tasks'], fetchTasks)` — загрузка плана
-- `useMutation(bulkCreateTasks)` — импорт; `onSuccess` → `invalidateQueries(['tasks'])`, закрытие диалога, toast
-- Шапка «Repka / BIOCAD» + `RepkaLogo`, кнопки **Чат** / **Импорт** / **Экспорт** (импорт и экспорт рядом)
-- `TaskDetailsDialog` — модалка выбранной задачи
+- `useTaskMutations().importMutation` — append-импорт; toast со статистикой created/skipped
+- Шапка «Repka / BIOCAD» + `RepkaLogo`, кнопки **Создать (+) / Чат / Импорт / Экспорт**
+- `TaskDetailsDialog` — создание и редактирование задачи (CRUD)
+- При открытой модалке задачи чат недоступен
 - Состояния: скелетон Ганта / ошибка API / Гантт с данными
-- `AppToaster` (`sonner`) — уведомления об импорте, экспорте и чате
+- `AppToaster` (`sonner`) — уведомления
 
 ## Структура `src/`
 
@@ -45,26 +46,30 @@ src/
 ├── main.tsx
 ├── index.css
 ├── api/
-│   ├── tasks.ts          # fetchTasks, bulkCreateTasks (+ normalize priority)
+│   ├── tasks.ts          # fetchTasks, create/update/delete/importTasks
 │   └── chat.ts           # sendChatMessage → POST /chat
 ├── types/
-│   ├── task.ts           # Task, TaskCreate, TaskPriority
+│   ├── task.ts           # Task, TaskCreate, TaskUpdate, TaskPriority, …
 │   └── chat.ts           # ChatMessage, ChatRequest/Response
+├── hooks/
+│   └── use-task-mutations.ts
 ├── lib/
 │   ├── api.ts            # axios instance
 │   ├── parse-excel.ts    # File → ImportParseResult (valid / errors / duplicates)
 │   ├── export-excel.ts   # Task[] → скачивание .xlsx
 │   ├── task-schema.ts    # zod-схемы импорта
+│   ├── task-form-schema.ts
 │   ├── gantt-mapper.ts   # Task → gantt-task-react + цвета priority
 │   ├── date.ts           # date helpers
 │   └── utils.ts          # cn()
 ├── stores/
-│   └── ui-store.ts       # selectedTaskId, isChatOpen, messages
+│   └── ui-store.ts       # selectedTaskId, isCreatingTask, isChatOpen, messages
 └── components/
     ├── excel-upload.tsx
     ├── gantt-chart.tsx
     ├── chat-panel.tsx
     ├── task-details-dialog.tsx
+    ├── predecessor-picker.tsx
     ├── repka-logo.tsx
     └── ui/               # button, card, dialog, input, textarea, label, scroll-area, skeleton, sonner
 ```
@@ -83,9 +88,14 @@ timeout: 10_000
 | Функция | Метод | Путь |
 | --- | --- | --- |
 | `fetchTasks` | GET | `/tasks` |
-| `bulkCreateTasks` | POST | `/tasks/bulk` с телом `{ tasks }` |
+| `createTask` | POST | `/tasks` |
+| `updateTask` | PATCH | `/tasks/{id}` |
+| `deleteTask` | DELETE | `/tasks/{id}` |
+| `importTasks` | POST | `/tasks/import` — append уникальных `title` |
 
 Ответы нормализуют `priority` (алиасы ru/en → канонические русские значения).
+
+Хук `useTaskMutations` — мутации create/update/delete/import; `onSuccess` → `invalidateQueries(['tasks'])` + toast (без optimistic updates).
 
 `api/chat.ts`:
 
@@ -101,8 +111,9 @@ timeout: 10_000
 
 - Drag&drop и выбор файла (`.xlsx` / `.xls`)
 - Вызов `parseExcelFile` → результат с валидными строками / ошибками / дубликатами
-- Если замечаний нет — `onConfirm(valid)` и сохранение через API
-- Если есть ошибки или дубликаты — **импорт не выполняется**, toast (`sonner`) со статистикой и примерами строк
+- Если замечаний нет — `onConfirm(valid)` и сохранение через `POST /tasks/import` (append)
+- Если есть ошибки или дубликаты **внутри файла** — **импорт не выполняется**, toast (`sonner`) со статистикой и примерами строк
+- На сервере дубликаты относительно уже существующих задач **пропускаются** (`skipped`), новые добавляются
 - Fatal-ошибки файла (нет листа, нет колонок, пустой файл) — toast + текст в модалке
 - Флаг `isUploading` от мутации родителя
 
@@ -200,7 +211,7 @@ Hover по бару / аватару — fixed tooltip: название, исп
 
 1. Сообщения в Zustand (`messages`, `addMessage`).
 2. Отправка через `useMutation(sendChatMessage)` с `history` без ошибочных реплик.
-3. Ответ ассистента рендерится через `react-markdown`.
+3. Ответ ассистента рендерится через `react-markdown` + `remark-gfm` (таблицы, списки); широкие блоки — с горизонтальным скроллом.
 4. `onSuccess` → `invalidateQueries(['tasks'])` — Гантт обновляется после MCP-мутаций.
 5. Спиннер (`Loader2`) на время запроса; ошибки — inline в ленте (`isError`).
 6. Панель скрывается через `setChatOpen(false)`; кнопка «Чат» в шапке возвращает её.
@@ -209,9 +220,13 @@ Hover по бару / аватару — fixed tooltip: название, исп
 
 `components/task-details-dialog.tsx`:
 
-- Открывается при ненулевом `selectedTaskId`.
-- Поля через `react-hook-form` (read-only display): название, описание, исполнитель, приоритет, даты, зависимости с подписью предшественников.
-- Правки плана в MVP — через чат, не через форму.
+- Режим edit: `selectedTaskId`; режим create: `isCreatingTask` (кнопка **+** в шапке).
+- Форма: `react-hook-form` + zod (`task-form-schema`); поля редактируемы кроме `id`.
+- Priority — `select`; predecessors — `PredecessorPicker` (мультиселект с поиском).
+- «Сохранить» → `POST` / `PATCH`; успех — toast + закрытие.
+- «Удалить» → AlertDialog → `DELETE` (cleanup ссылок на бэкенде).
+- Закрытие без сохранения — молча сбросить форму.
+- Пока модалка открыта, чат недоступен (`setChatOpen` блокируется / кнопка disabled).
 
 ## Zustand
 
@@ -220,16 +235,18 @@ Hover по бару / аватару — fixed tooltip: название, исп
 | Поле / метод | Назначение |
 | --- | --- |
 | `selectedTaskId` | Выбранная задача на Ганте / в модалке |
+| `isCreatingTask` | Режим создания задачи |
 | `isChatOpen` | Видимость панели чата |
 | `messages` | История чата |
-| `setSelectedTaskId` / `setChatOpen` | Сеттеры UI |
+| `setSelectedTaskId` / `openCreateTask` / `closeTaskDialog` | UI задачи (+ закрытие чата) |
+| `setChatOpen` | Сеттер чата (no-op, если открыта модалка задачи) |
 | `addMessage` / `clearMessages` | Управление сообщениями |
 
 ## TanStack Query
 
 | Ключ | Источник | Инвалидация |
 | --- | --- | --- |
-| `['tasks']` | `GET /tasks` | после `POST /tasks/bulk` и успешного `POST /chat` |
+| `['tasks']` | `GET /tasks` | после create/update/delete/import и успешного `POST /chat` |
 
 ## UI-kit
 
@@ -253,10 +270,11 @@ npm run dev
 
 Нужен запущенный бэкенд на порту 8000 (или корректный `VITE_API_URL`) и `OPENROUTER_API_KEY` для чата. Для демо без Excel: `python seed.py` из `backend/`.
 
-## Планируемое (этап 6+)
+## Планируемое (этап 8+)
 
-- Деплой Render / Vercel
-- Расширенный README, `Roadmap-to-production.md`, демо-видео
+- Enterprise UI polish, деплой Render / Vercel
+- `Roadmap-to-production.md` (UUID, PostgreSQL, Auth)
+- Опционально: слой B — автосдвиг дат при `add_dependency`
 
 ## Связанные документы
 

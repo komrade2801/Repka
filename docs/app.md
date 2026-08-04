@@ -6,7 +6,7 @@ Repka — MVP AI-native диаграммы Ганта. Пользователь:
 
 1. Загружает план из Excel (`.xlsx` / `.xls`) или поднимает демо через `backend/seed.py`.
 2. Видит задачи на диаграмме Ганта (день / неделя / месяц, навигация, приоритеты).
-3. Меняет расписание через чат: LLM вызывает MCP-инструменты на бэкенде, изменения пишутся в БД и подтягиваются во фронтенд.
+3. Редактирует задачи вручную (модалка CRUD) или через чат: LLM вызывает MCP-инструменты на бэкенде; изменения пишутся в БД и подтягиваются во фронтенд.
 
 Проект — монорепозиторий: `/frontend` + `/backend`, общий корневой `.env`.
 
@@ -24,8 +24,8 @@ Repka — MVP AI-native диаграммы Ганта. Пользователь:
 ┌─────────────────────┐         HTTP/JSON          ┌──────────────────────────┐
 │  Frontend (Vite)    │ ─────────────────────────► │  Backend (FastAPI)       │
 │                     │                            │                          │
-│  Excel → zod → API  │  POST /tasks/bulk          │  SQLAlchemy → SQLite     │
-│  GET /tasks → Gantt │  GET  /tasks               │  (+ seed.py для демо)    │
+│  Excel → zod → API  │  POST /tasks/import        │  SQLAlchemy → SQLite     │
+│  GET /tasks → Gantt │  POST/PATCH/DELETE /tasks  │  (+ seed.py для демо)    │
 │  ChatPanel → Gantt  │  POST /chat                │  OpenRouter + MCP tools  │
 └─────────────────────┘                            └──────────────────────────┘
 ```
@@ -34,7 +34,9 @@ Repka — MVP AI-native диаграммы Ганта. Пользователь:
 
 1. **SQLite → PostgreSQL.** Модели через SQLAlchemy; для production достаточно сменить `DATABASE_URL`. На SQLite дополнительно работает `ensure_sqlite_columns` для эволюции схемы (`priority`).
 2. **Парсинг Excel на клиенте.** `xlsx` + `zod` до сетевого запроса — быстрая обратная связь, меньше нагрузки на API.
-3. **Серверное состояние в TanStack Query.** После мутаций (импорт, чат) — `invalidateQueries(['tasks'])`, Гантт обновляется без ручных `useEffect`.
+3. **Серверное состояние в TanStack Query.** После мутаций (CRUD, импорт, чат) — `invalidateQueries(['tasks'])`, Гантт обновляется без ручных `useEffect` и без optimistic updates.
+4. **Импорт = append уникальных `title`.** Полная замена плана (`/tasks/bulk`) снята. Ручной CRUD допускает одинаковые названия.
+5. **Зависимости — слой A.** Существование / self-ref / циклы; cleanup при delete. Автосдвиг дат (FS) — позже.
 
 ## Основные потоки
 
@@ -42,8 +44,8 @@ Repka — MVP AI-native диаграммы Ганта. Пользователь:
 
 1. Пользователь выбирает файл в `ExcelUpload` (drag&drop или input).
 2. `parseExcelFile` читает первый лист, нормализует заголовки, валидирует **построчно** через `excelTaskSchema` (форматы, priority, predecessors, дубликаты названий).
-3. При любых ошибках или дубликатах — toast с деталями, импорт **не** выполняется.
-4. `POST /tasks/bulk` **заменяет** все задачи в БД; ID назначаются последовательно с 1 (чтобы `predecessors` из Excel ссылались на порядок строк, 1-based).
+3. При ошибках или дубликатах **внутри файла** — toast с деталями, импорт **не** выполняется.
+4. `POST /tasks/import` **добавляет** задачи с уникальным `title` (относительно БД); дубликаты → `skipped`. ID — autoincrement; predecessors в файле ремапятся с 1-based индексов строк (или существующих id).
 5. Фронтенд инвалидирует `['tasks']` и перерисовывает Гантт.
 
 ### Демо без Excel / демо-файл
@@ -62,13 +64,13 @@ python seed.py          # ~250 задач в SQLite
 1. `GET /tasks` → кеш TanStack Query.
 2. `toGanttTasks` маппит задачи в формат `gantt-task-react` (start/end из `start_date` + `duration`, цвет бара по `priority`).
 3. Масштаб День/Неделя/Месяц, навигация периода, кастомный task list (аватар, сроки, ресайз).
-4. Клик по задаче → `selectedTaskId` в Zustand → модалка `TaskDetailsDialog` (react-hook-form).
+4. Клик по задаче → `selectedTaskId` → модалка `TaskDetailsDialog` (редактирование / удаление). Кнопка **+** → создание задачи.
 
 ### Чат с AI
 
 1. `ChatPanel` шлёт `POST /chat` с `message` и `history` из Zustand.
 2. Агент подставляет снимок задач (включая `priority`) в system prompt, вызывает OpenRouter с tool schemas из MCP.
-3. LLM может вызвать `move_task`, `assign_task`, `add_dependency` (до 6 раундов). Смена приоритета через агента не поддерживается.
+3. LLM может вызвать tools: `move_task`, `assign_task`, `add_dependency`, `remove_dependency`, `create_task`, `delete_task`, `update_task_duration`, `update_task_priority` (до 6 раундов).
 4. Ответ: `{ reply, tools_used }`. UI добавляет ответ в store и делает `invalidateQueries(['tasks'])`.
 
 ## Формат Excel
@@ -80,7 +82,7 @@ python seed.py          # ~250 задач в SQLite
 | `Исполнитель` | нет | Исполнитель |
 | `Дата начала` | да | Дата начала (ISO, Excel serial или парсируемая строка) |
 | `Длительность` | да | Длительность в днях (≥ 1) |
-| `Предшественники` | нет | ID предшественников через запятую (по порядку строк после импорта) |
+| `Предшественники` | нет | ID предшественников: при импорте — 1-based индекс строки файла и/или существующий id в БД |
 | `Приоритет` | нет | `Критический` / `Высокий` / `Средний` / `Низкий` / `Опционально`; default `Средний` |
 
 Заголовки нормализуются: trim, lower case, пробелы → `_`. Английские алиасы (`title`, `start_date`, …) по-прежнему принимаются при импорте. Экспорт пишет русские заголовки (с заглавной буквы), жирный крупный header-ряд и ширину колонок по контенту.
@@ -138,7 +140,7 @@ Repka/
 │   │   ├── database.py      # Engine, Session, Base, ensure_sqlite_columns
 │   │   ├── models.py        # ORM Task + TaskPriority
 │   │   ├── schemas.py       # Pydantic DTO
-│   │   ├── agent.py         # OpenRouter + tool calling
+│   │   ├── agent.py         # OpenRouter + tool calling (см. docs/agent-mcp.md)
 │   │   ├── mcp_tools.py     # MCP tools (мутации задач)
 │   │   └── routers/
 │   │       ├── tasks.py
@@ -171,12 +173,16 @@ Repka/
 | 2. Excel + Гантт | готово (+ масштаб, навигация, цвета priority) |
 | 3. AI + MCP + `POST /chat` | готово |
 | 4. UI чата и модалка задачи | готово |
-| 5. Экспорт Excel, UX-полировка | готово (экспорт, sonner, скелетон, валидация импорта, `samples/demo-tasks.xlsx`) |
-| 6. Деплой (Render / Vercel), README, демо | частично: базовый README; деплой, Roadmap-to-production, видео — нет |
+| 5. Экспорт Excel, UX-полировка | готово |
+| 6. CRUD + импорт-append | готово |
+| 7. Расширение MCP Tools | готово (слой B — опционально, не делали) |
+| 8. Enterprise UI/UX | частично |
+| 9. Деплой, README, демо | частично: базовый README |
 
 ## Связанные документы
 
 - [README](../README.md) — быстрый старт
 - [Backend](./backend.md)
 - [Frontend](./frontend.md)
+- [AI-агент и MCP Tools](./agent-mcp.md) — архитектура ассистента и реестр tools
 - [plan.md](../plan.md) — стек, ADR, roadmap

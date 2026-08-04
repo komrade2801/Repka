@@ -22,3 +22,17 @@ export type Task = {
 }
 
 export type TaskCreate = Omit<Task, "id">
+
+export type TaskUpdate = Partial<TaskCreate>
+
+export type TaskImportSkipped = {
+  title: string
+  reason: string
+}
+
+export type TaskImportResult = {
+  created: Task[]
+  skipped: TaskImportSkipped[]
+}
+
+export const TASKS_QUERY_KEY = ["tasks"] as const

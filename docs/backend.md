@@ -1,6 +1,6 @@
 # Backend — документация
 
-API-сервис Repka на FastAPI: хранение задач, bulk-импорт, сидинг демо-данных и AI-чат с MCP-инструментами для изменения плана.
+API-сервис Repka на FastAPI: хранение задач, CRUD, append-импорт, сидинг демо-данных и AI-чат с MCP-инструментами для изменения плана.
 
 ## Стек
 
@@ -17,6 +17,7 @@ API-сервис Repka на FastAPI: хранение задач, bulk-импо�
 
 - Создаёт таблицы (`Base.metadata.create_all`)
 - Вызывает `ensure_sqlite_columns()` (добавление/миграция колонки `priority` на уже существующих SQLite)
+- `RateLimitMiddleware` — лимиты на mutate `/tasks*` и `/chat`
 - CORS из `settings.cors_origins` (dev: Vite на 5173)
 - Роутеры: `tasks`, `chat`
 - `GET /health` → `{"status": "ok"}`
@@ -69,49 +70,66 @@ API-сервис Repka на FastAPI: хранение задач, bulk-импо�
 `app/schemas.py`:
 
 - `TaskCreate` / `TaskRead` — CRUD-поля задачи, включая `priority`
+- `TaskUpdate` — частичное обновление (все поля Optional)
+- `TaskImportRequest` / `TaskImportResult` — append-импорт (`created` + `skipped`)
 - `normalize_priority` — алиасы (ru/en: `high` → `Высокий`, `critical` → `Критический`, …); пустое/неизвестное → `Средний`
-- `TaskBulkCreate` — `{ tasks: TaskCreate[] }` (минимум 1)
 - `ChatRequest` — `{ message, history?: { role, content }[] }`
 - `ChatResponse` — `{ reply, tools_used: string[] }`
 
+## Валидация зависимостей (слой A)
+
+`app/task_graph.py`:
+
+- parse/format `predecessors` (`"1,2"`), схлопывание дубликатов;
+- существование predecessor id;
+- запрет self-ref;
+- проверка ацикличности;
+- при `DELETE` — очистка ссылок на удалённый id у остальных задач.
+
+Автосдвиг `start_date` (FS) **не** выполняется.
 ## HTTP API
 
 ### Задачи — `app/routers/tasks.py`
 
-Префикс `/tasks`.
+Префикс `/tasks`. ID — `int` PK + autoincrement (после MVP планируется UUID).
 
 #### `GET /tasks`
 
 Список задач, сортировка по `id`.  
 Ответ: `TaskRead[]`.
 
-#### `POST /tasks/bulk`
+#### `POST /tasks`
 
-Полная замена набора задач:
+Создание одной задачи. Ответ: `TaskRead` (201).  
+Валидация predecessors (слой A). Поле `id` назначает БД.
 
-1. `DELETE` всех строк
-2. Вставка с явными `id = 1..N` (порядок массива = порядок строк Excel)
-3. `commit` + refresh
+#### `PATCH /tasks/{id}`
 
-Тело:
+Частичное обновление. 404 если нет задачи; 422 при ошибке графа зависимостей.
+
+#### `DELETE /tasks/{id}`
+
+Удаление + cleanup ссылок у зависимых. 204.
+
+#### `POST /tasks/import`
+
+Append уникальных по `title` (без учёта регистра):
+
+1. Дубликаты относительно БД и внутри файла → `skipped`
+2. Новые строки → insert с autoincrement id
+3. `predecessors` в файле: сначала как **1-based индекс строки файла** (remap на новые/существующие id), иначе как уже существующий id в БД
+4. Валидация графа; при ошибке — rollback + 422
+
+Ответ:
 
 ```json
 {
-  "tasks": [
-    {
-      "title": "Аналитика",
-      "description": null,
-      "assignee": "Иван",
-      "start_date": "2026-08-01",
-      "duration": 5,
-      "predecessors": null,
-      "priority": "Высокий"
-    }
-  ]
+  "created": [ /* TaskRead[] */ ],
+  "skipped": [{ "title": "...", "reason": "duplicate_title" }]
 }
 ```
 
-Ответ: созданные `TaskRead[]`. Поле `priority` опционально в запросе (default `Средний`); в ответе всегда присутствует.
+`POST /tasks/bulk` (полная замена плана) **удалён**.
 
 ### Чат — `app/routers/chat.py`
 
@@ -139,6 +157,8 @@ API-сервис Repka на FastAPI: хранение задач, bulk-импо�
 
 ## AI-агент
 
+Подробная архитектура: [AI-агент и MCP Tools](./agent-mcp.md).
+
 `app/agent.py` — `run_chat(message, history, db, settings)`:
 
 1. Читает все задачи, вставляет markdown-таблицу в **system prompt** (`format_tasks_for_prompt`, колонки включают `priority`).
@@ -148,28 +168,26 @@ API-сервис Repka на FastAPI: хранение задач, bulk-импо�
 5. До **6** раундов (`MAX_TOOL_ROUNDS`): completion → при tool_calls вызывает `mcp.call_tool` → результат в role `tool` → снова LLM.
 6. Возвращает `(reply_text, tools_used)`.
 
-Системный промпт задаёт роль «Repka», правила резолва задач по ID/title и ответ на языке пользователя (в т.ч. русском). Агент **не** создаёт и **не** удаляет задачи — только три tool’а ниже. Отдельного tool для смены `priority` нет.
+Системный промпт: роль «Repka», резолв по ID/title, ответ на языке пользователя. Tools: аналитика/поиск + move/assign/create/delete, duration/priority, add/remove dependency.
 
-Клиент OpenAI: `AsyncOpenAI` с `base_url` OpenRouter и заголовками `HTTP-Referer` / `X-Title`.
+Клиент: `AsyncOpenAI` → OpenRouter (`HTTP-Referer` / `X-Title`).
 
 ## MCP Tools
 
-`app/mcp_tools.py` — `MCPServer("Repka")`, tools вызываются **in-process** (та же сессия SQLAlchemy, что у запроса `/chat`).
+`app/mcp_tools.py` — in-process `MCPServer("Repka")` (та же сессия, что `/chat`).
 
 | Tool | Аргументы | Действие |
 | --- | --- | --- |
-| `move_task` | `task_id`, `new_start_date` (YYYY-MM-DD) | Меняет `start_date` |
-| `assign_task` | `task_id`, `assignee` | Меняет исполнителя |
-| `add_dependency` | `task_id`, `predecessor_id` | Добавляет FS-зависимость в `predecessors` |
+| `get_project_summary` | `assignee?`, `priority?` | Агрегаты COUNT / GROUP BY |
+| `search_tasks` | `query?`, `assignee?`, `priority?`, `start_from/to?`, `finish_from/to?`, `limit=10` | SQL-поиск/фильтр (finish = start + duration) |
+| `move_task` | `task_id`, `new_start_date` | `start_date` |
+| `assign_task` | `task_id`, `assignee` | Исполнитель (`` → сброс) |
+| `add_dependency` / `remove_dependency` | `task_id`, `predecessor_id` | FS / снятие (слой A) |
+| `create_task` | `title`, `start_date`, … | Создание |
+| `delete_task` | `task_id` | Удаление + cleanup |
+| `update_task_duration` / `update_task_priority` | id + значение | Длительность / приоритет |
 
-Ограничения:
-
-- задача должна существовать;
-- дата — ISO;
-- нельзя зависеть от самой себя;
-- повторная зависимость — no-op с сообщением.
-
-После успешной мутации: `commit` + `refresh`. Ошибки tool’а откатывают сессию (`rollback` в агенте) и передаются модели как текст ошибки.
+Валидация графа — `task_graph` (слой A). Лимиты полей как у HTTP CRUD. Мутации: `commit`/`refresh`; ошибки → `rollback` + текст в LLM.
 
 ## Демо-сидинг
 
@@ -212,9 +230,11 @@ backend/
 │   ├── models.py       # Task ORM + TaskPriority
 │   ├── schemas.py      # request/response DTO + normalize_priority
 │   ├── agent.py        # LLM loop + tools
-│   ├── mcp_tools.py    # move / assign / dependency
+│   ├── mcp_tools.py    # analytics / search / mutations
+│   ├── task_graph.py   # predecessors validation (layer A)
+│   ├── rate_limit.py   # mutate/chat rate limits
 │   └── routers/
-│       ├── tasks.py    # GET /, POST /bulk
+│       ├── tasks.py    # GET /, POST /, PATCH /{id}, DELETE /{id}, POST /import
 │       └── chat.py     # POST /chat
 ├── seed.py             # демо-данные (~250 задач)
 └── requirements.txt
@@ -223,4 +243,5 @@ backend/
 ## Связанные документы
 
 - [Обзор приложения](./app.md)
+- [AI-агент и MCP Tools](./agent-mcp.md)
 - [Frontend](./frontend.md)

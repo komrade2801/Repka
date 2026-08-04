@@ -1,9 +1,9 @@
 import { useState } from "react"
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { useQuery } from "@tanstack/react-query"
 import { Download, MessageSquare, Upload } from "lucide-react"
 import { toast } from "sonner"
 
-import { bulkCreateTasks, fetchTasks } from "@/api/tasks"
+import { fetchTasks } from "@/api/tasks"
 import { ChatPanel } from "@/components/chat-panel"
 import { ExcelUpload } from "@/components/excel-upload"
 import { GanttChart } from "@/components/gantt-chart"
@@ -19,37 +19,27 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog"
 import { GanttLoadingSkeleton } from "@/components/ui/skeleton"
+import { useTaskMutations } from "@/hooks/use-task-mutations"
 import { downloadTasksExcel } from "@/lib/export-excel"
 import type { ExcelTask } from "@/lib/task-schema"
-import { useUiStore } from "@/stores/ui-store"
 import { cn } from "@/lib/utils"
-
-const TASKS_KEY = ["tasks"] as const
+import { useUiStore } from "@/stores/ui-store"
+import { TASKS_QUERY_KEY } from "@/types/task"
 
 export default function App() {
-  const queryClient = useQueryClient()
   const [importOpen, setImportOpen] = useState(false)
   const isChatOpen = useUiStore((s) => s.isChatOpen)
   const setChatOpen = useUiStore((s) => s.setChatOpen)
+  const selectedTaskId = useUiStore((s) => s.selectedTaskId)
+  const isCreatingTask = useUiStore((s) => s.isCreatingTask)
+  const taskDialogOpen = selectedTaskId !== null || isCreatingTask
 
   const tasksQuery = useQuery({
-    queryKey: TASKS_KEY,
+    queryKey: TASKS_QUERY_KEY,
     queryFn: fetchTasks,
   })
 
-  const uploadMutation = useMutation({
-    mutationFn: (tasks: ExcelTask[]) => bulkCreateTasks(tasks),
-    onSuccess: (saved) => {
-      void queryClient.invalidateQueries({ queryKey: TASKS_KEY })
-      setImportOpen(false)
-      toast.success(`Импортировано задач: ${saved.length}`)
-    },
-    onError: (error) => {
-      toast.error(
-        error instanceof Error ? error.message : "Не удалось сохранить задачи",
-      )
-    },
-  })
+  const { importMutation } = useTaskMutations()
 
   const tasks = tasksQuery.data ?? []
 
@@ -82,6 +72,12 @@ export default function App() {
               type="button"
               variant="outline"
               size="sm"
+              disabled={taskDialogOpen}
+              title={
+                taskDialogOpen
+                  ? "Закройте карточку задачи, чтобы открыть чат"
+                  : undefined
+              }
               onClick={() => setChatOpen(true)}
             >
               <MessageSquare data-icon="inline-start" />
@@ -93,7 +89,7 @@ export default function App() {
             open={importOpen}
             onOpenChange={(open) => {
               setImportOpen(open)
-              if (!open) uploadMutation.reset()
+              if (!open) importMutation.reset()
             }}
           >
             <DialogTrigger
@@ -108,21 +104,23 @@ export default function App() {
               <DialogHeader>
                 <DialogTitle>Импорт Excel</DialogTitle>
                 <DialogDescription>
-                  Колонки: Задача, Описание, Исполнитель, Дата начала,
-                  Длительность, Предшественники, Приоритет. Обязательны: Задача,
-                  Дата начала, Длительность.
+                  Добавляет только новые задачи с уникальным названием.
+                  Дубликаты (без учёта регистра) пропускаются. Колонки: Задача,
+                  Описание, Исполнитель, Дата начала, Длительность,
+                  Предшественники, Приоритет.
                 </DialogDescription>
               </DialogHeader>
               <ExcelUpload
-                isUploading={uploadMutation.isPending}
-                onConfirm={async (parsed) => {
-                  await uploadMutation.mutateAsync(parsed)
+                isUploading={importMutation.isPending}
+                onConfirm={async (parsed: ExcelTask[]) => {
+                  await importMutation.mutateAsync(parsed)
+                  setImportOpen(false)
                 }}
               />
-              {uploadMutation.isError ? (
+              {importMutation.isError ? (
                 <p className="text-sm text-destructive" role="alert">
-                  {uploadMutation.error instanceof Error
-                    ? uploadMutation.error.message
+                  {importMutation.error instanceof Error
+                    ? importMutation.error.message
                     : "Ошибка загрузки"}
                 </p>
               ) : null}

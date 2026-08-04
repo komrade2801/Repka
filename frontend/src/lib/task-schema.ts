@@ -1,5 +1,6 @@
 import { z } from "zod"
 import { FIELD_LABELS } from "@/lib/excel-columns"
+import { TASK_FIELD_MAX } from "@/lib/task-form-schema"
 import {
   DEFAULT_TASK_PRIORITY,
   TASK_PRIORITIES,
@@ -114,10 +115,31 @@ export const excelTaskSchema = z.object({
       ctx.addIssue({ code: "custom", message: "обязательно" })
       return z.NEVER
     }
+    if (title.length > TASK_FIELD_MAX.title) {
+      ctx.addIssue({
+        code: "custom",
+        message: `не больше ${TASK_FIELD_MAX.title} символов`,
+      })
+      return z.NEVER
+    }
     return title
   }),
-  description: optionalString,
-  assignee: optionalString,
+  description: optionalString.superRefine((value, ctx) => {
+    if (value && value.length > TASK_FIELD_MAX.description) {
+      ctx.addIssue({
+        code: "custom",
+        message: `не больше ${TASK_FIELD_MAX.description} символов`,
+      })
+    }
+  }),
+  assignee: optionalString.superRefine((value, ctx) => {
+    if (value && value.length > TASK_FIELD_MAX.assignee) {
+      ctx.addIssue({
+        code: "custom",
+        message: `не больше ${TASK_FIELD_MAX.assignee} символов`,
+      })
+    }
+  }),
   start_date: dateSchema,
   duration: durationSchema,
   predecessors: predecessorsSchema,
