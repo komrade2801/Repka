@@ -110,12 +110,12 @@ const MONTHS_LONG = [
   "Декабрь",
 ] as const
 
-const HEADER_ROW_H = 25
+const HEADER_ROW_H = 32
 const CALENDAR_HEADER_H = HEADER_ROW_H
 const SPLITTER_W = 1
 const ROW_HEIGHT = 44
 const MIN_COL_WITH_SCROLL = 36
-const DATES_COL = 88
+const DATES_COL = 96
 const ASSIGNEE_COL = 40
 const LIST_MIN = 160
 const LIST_MAX = 520
@@ -155,7 +155,7 @@ function formatCompactRange(start: Date, exclusiveEnd: Date): string {
     const mm = String(d.getMonth() + 1).padStart(2, "0")
     return `${dd}.${mm}`
   }
-  return `${fmt(start)}-${fmt(end)}`
+  return `${fmt(start)}–${fmt(end)}`
 }
 
 function formatDayLabel(date: Date): string {
@@ -297,13 +297,14 @@ function withoutSelectedBarStyles(tasks: GanttTask[]): GanttTask[] {
 }
 
 function dayColumnRules(columnWidth: number): CSSProperties {
+  const line = "color-mix(in oklab, var(--border) 40%, transparent)"
   return {
     backgroundImage: `repeating-linear-gradient(
       to right,
       transparent 0,
       transparent ${columnWidth - 1}px,
-      var(--border) ${columnWidth - 1}px,
-      var(--border) ${columnWidth}px
+      ${line} ${columnWidth - 1}px,
+      ${line} ${columnWidth}px
     )`,
   }
 }
@@ -380,11 +381,13 @@ function lockTimelinePad(timeline: HTMLElement | null, padPx: number) {
 
 function AssigneeAvatar({ name }: { name: string | null | undefined }) {
   const tip = name?.trim() || "Без исполнителя"
+  const chipClass =
+    "inline-flex size-7 shrink-0 cursor-default select-none items-center justify-center rounded-full border border-border bg-muted/50 font-mono text-[10px] font-medium tracking-tight"
   if (!name?.trim()) {
     return (
       <span
         data-gantt-assignee-tip={tip}
-        className="inline-flex size-7 shrink-0 cursor-default select-none items-center justify-center rounded-full bg-muted text-[10px] font-medium text-muted-foreground"
+        className={cn(chipClass, "text-muted-foreground")}
       >
         —
       </span>
@@ -393,7 +396,7 @@ function AssigneeAvatar({ name }: { name: string | null | undefined }) {
   return (
     <span
       data-gantt-assignee-tip={tip}
-      className="inline-flex size-7 shrink-0 cursor-default select-none items-center justify-center rounded-full bg-muted text-[10px] font-medium tracking-tight text-foreground"
+      className={cn(chipClass, "text-foreground")}
     >
       {formatAssigneeInitials(name)}
     </span>
@@ -473,7 +476,8 @@ function PeriodBodyGrid({
         top: CALENDAR_HEADER_H,
         width: timelineWidth,
         height,
-        boxShadow: "inset 1px 0 0 var(--border)",
+        boxShadow:
+          "inset 1px 0 0 color-mix(in oklab, var(--border) 40%, transparent)",
         ...dayColumnRules(columnWidth),
       }}
       aria-hidden
@@ -675,10 +679,12 @@ export function GanttChart({
                   }}
                 >
                   {col.key === "assignee" ? (
-                    <User
-                      className="size-3.5 shrink-0"
-                      aria-label="Исполнители"
-                    />
+                    <span title="Исполнитель" className="inline-flex">
+                      <User
+                        className="size-3.5 shrink-0"
+                        aria-label="Исполнитель"
+                      />
+                    </span>
                   ) : col.label ? (
                     <span className="truncate">{col.label}</span>
                   ) : null}
@@ -773,7 +779,7 @@ export function GanttChart({
                   ) : null}
                   {listLayout.showDates ? (
                     <div
-                      className="_3lLk3 is-dates-col flex items-center tabular-nums text-[12px] text-muted-foreground"
+                      className="_3lLk3 is-dates-col flex items-center tabular-nums text-[11px] text-muted-foreground"
                       style={{
                         minWidth: listLayout.dates,
                         maxWidth: listLayout.dates,
@@ -1278,8 +1284,8 @@ export function GanttChart({
             rowHeight={ROW_HEIGHT}
             columnWidth={frame.metrics.columnWidth}
             ganttHeight={frame.metrics.ganttHeight}
-            barCornerRadius={6}
-            barFill={60}
+            barCornerRadius={4}
+            barFill={70}
             fontFamily="inherit"
             fontSize="13px"
             TaskListHeader={TaskListHeader}

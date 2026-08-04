@@ -212,7 +212,7 @@
   top: 0;
   left: 0;
   width: var(--gantt-v-scroll-width, 12px);
-  height: var(--gantt-header-height, 25px);
+  height: var(--gantt-header-height, 32px);
   box-sizing: border-box;
   background: var(--background);
   border-right: 1px solid var(--border);
@@ -223,7 +223,7 @@
 .gantt-shell.is-fixed-window ._1eT-t {
   display: none;
   position: absolute !important;
-  top: var(--gantt-header-height, 25px) !important;
+  top: var(--gantt-header-height, 32px) !important;
   left: 0 !important;
   right: auto !important;
   margin: 0 !important;
@@ -324,7 +324,13 @@
 
 .gantt-shell.is-fixed-window ._WuQ0f.is-dates-col,
 .gantt-shell.is-fixed-window ._3lLk3.is-dates-col {
-  min-width: 88px;
+  min-width: 96px;
+}
+
+/* Bars above PeriodBodyGrid (z-0); calendar header overlay stays at z-10 */
+.gantt-shell.is-fixed-window ._2B2zv {
+  position: relative;
+  z-index: 1;
 }
 
 .gantt-shell.is-list-collapsed ._3_ygE,
@@ -355,12 +361,13 @@
 }
 
 /*
- * Bar labels: name lives in the task list + hover tip.
- * Outside labels collide with dependency arrows; hide all chart text labels.
+ * Bar labels: name lives in the task list + cursor hover tip.
+ * Inside/outside SVG labels collide with short bars and dependency arrows.
  */
 .gantt-shell ._3zRJQ,
 .gantt-shell ._3KcaM {
   display: none !important;
+  pointer-events: none;
 }
 
 /* Subtle inset from grid lines without eating bar thickness */
