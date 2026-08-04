@@ -32,9 +32,9 @@ npm run preview  # превью production-сборки
 
 - `useQuery(['tasks'], fetchTasks)` — загрузка плана
 - `useMutation(bulkCreateTasks)` — импорт; `onSuccess` → `invalidateQueries(['tasks'])` и закрытие диалога
-- Шапка «Repka», кнопки **Импорт** / **Чат**, область `GanttChart` + боковая `ChatPanel` (side-by-side)
+- Шапка «Repka / BIOCAD» + `RepkaLogo`, кнопки **Чат** / **Импорт**, область `GanttChart` + боковая `ChatPanel` (side-by-side)
 - `TaskDetailsDialog` — модалка выбранной задачи
-- Состояния загрузки / ошибки / пустого списка
+- Состояния: текст «Загрузка задач…» / ошибка API / Гантт с данными
 
 ## Структура `src/`
 
@@ -44,16 +44,16 @@ src/
 ├── main.tsx
 ├── index.css
 ├── api/
-│   ├── tasks.ts          # fetchTasks, bulkCreateTasks
+│   ├── tasks.ts          # fetchTasks, bulkCreateTasks (+ normalize priority)
 │   └── chat.ts           # sendChatMessage → POST /chat
 ├── types/
-│   ├── task.ts           # Task, TaskCreate
+│   ├── task.ts           # Task, TaskCreate, TaskPriority
 │   └── chat.ts           # ChatMessage, ChatRequest/Response
 ├── lib/
 │   ├── api.ts            # axios instance
 │   ├── parse-excel.ts    # File → ExcelTask[]
 │   ├── task-schema.ts    # zod-схемы импорта
-│   ├── gantt-mapper.ts   # Task → gantt-task-react
+│   ├── gantt-mapper.ts   # Task → gantt-task-react + цвета priority
 │   ├── date.ts           # date helpers
 │   └── utils.ts          # cn()
 ├── stores/
@@ -63,6 +63,7 @@ src/
     ├── gantt-chart.tsx
     ├── chat-panel.tsx
     ├── task-details-dialog.tsx
+    ├── repka-logo.tsx
     └── ui/               # button, card, dialog, input, textarea, label, scroll-area
 ```
 
@@ -82,13 +83,15 @@ timeout: 10_000
 | `fetchTasks` | GET | `/tasks` |
 | `bulkCreateTasks` | POST | `/tasks/bulk` с телом `{ tasks }` |
 
+Ответы нормализуют `priority` (алиасы ru/en → канонические русские значения).
+
 `api/chat.ts`:
 
 | Функция | Метод | Путь | Таймаут |
 | --- | --- | --- | --- |
 | `sendChatMessage` | POST | `/chat` | 120 с |
 
-Тип `Task` (`types/task.ts`) совпадает с бэкенд `TaskRead` (`start_date` — строка ISO `YYYY-MM-DD`).
+Тип `Task` (`types/task.ts`) совпадает с бэкенд `TaskRead` (`start_date` — строка ISO `YYYY-MM-DD`, `priority` — один из `Критический` / `Высокий` / `Средний` / `Низкий` / `Опционально`).
 
 ## Импорт Excel
 
@@ -109,13 +112,14 @@ timeout: 10_000
 ### Схема — `task-schema.ts`
 
 Обязательные: `title`, `start_date`, `duration`.  
-Опциональные: `description`, `assignee`, `predecessors`.
+Опциональные: `description`, `assignee`, `predecessors`, `priority`.
 
 Особенности:
 
 - Excel serial date → UTC-дата → `YYYY-MM-DD`
 - `duration` — целое ≥ 1
 - пустые опциональные поля → `null`
+- `priority` — алиасы (`high`/`высокий`/…) → канон; пустое → `Средний`
 
 ## Диаграмма Ганта
 
@@ -123,28 +127,44 @@ timeout: 10_000
 
 ### Маппинг
 
-`toGanttTasks`:
+`toGanttTasks` (`lib/gantt-mapper.ts`):
 
 - `id` → string
 - `name` ← `title`
 - `start` ← `start_date`
 - `end` ← start + `duration` дней
 - `dependencies` ← split `predecessors`
-- стили баров (slate / teal)
+- стили баров из `PRIORITY_COLORS` по `priority`
 
-### Масштаб
+### Масштаб и навигация
 
 | UI | Режим библиотеки | Поведение |
 | --- | --- | --- |
-| День | `ViewMode.Day` | Дневные колонки по диапазону задач |
+| День | `ViewMode.Day` | Однодневное окно |
 | Неделя | `ViewMode.Day` + кастомный хедер | Текущая календарная неделя Пн–Вс |
-| Месяц | `ViewMode.Month` | Месячные колонки |
+| Месяц | `ViewMode.Day` + кастомный хедер | Дни текущего месяца |
+
+Кнопки **Назад / Сегодня / Вперёд** сдвигают `viewDate` (день / неделя / месяц).
 
 Адаптивная ширина колонок через `ResizeObserver` и `computeMetrics` (подгонка под ширину shell без горизонтального «разъезда»).
 
-Горизонтальный скролл: только вид «Месяц» при открытом чате, если колонки не влезают при `MIN_COL_WITH_SCROLL`. «День» и «Неделя» всегда подгоняют ширину колонок. Сетка дней рисуется своим оверлеем на всё окно (библиотека в Day mode обрезает ticks на ~task end + 19 дней).
+Горизонтальный скролл: только вид «Месяц» при открытом чате (`allowHorizontalScroll`), если колонки не влезают при `MIN_COL_WITH_SCROLL`. «День» и «Неделя» всегда подгоняют ширину колонок. Сетка дней рисуется своим оверлеем на всё окно (библиотека в Day mode обрезает ticks на ~task end + 19 дней).
 
-Кастомные `TaskListHeader` / `TaskListTable` — колонки «Задача / Аватар / Сроки» (компактные даты `ДД.ММ — ДД.ММ`). На виде «День» колонка сроков скрыта. Ширина панели настраивается ресайзером, есть сворачивание и меню колонок. Цвет баров — по `priority`.
+При смене масштаба/ширины предыдущий кадр остаётся видимым до готовности следующего (без «мигания» скелетоном).
+
+### Панель задач (task list)
+
+Кастомные `TaskListHeader` / `TaskListTable`:
+
+- колонки «Задача / Аватар исполнителя / Сроки» (`ДД.ММ — ДД.ММ`);
+- на виде «День» колонка сроков по умолчанию скрыта;
+- меню колонок (вкл/выкл исполнителей и сроков);
+- сворачивание списка;
+- ресайзер ширины панели.
+
+### Тултипы
+
+Hover по бару / аватару — fixed tooltip: название, исполнитель, приоритет, даты.
 
 ### Выбор задачи
 
@@ -158,14 +178,15 @@ timeout: 10_000
 2. Отправка через `useMutation(sendChatMessage)` с `history` без ошибочных реплик.
 3. Ответ ассистента рендерится через `react-markdown`.
 4. `onSuccess` → `invalidateQueries(['tasks'])` — Гантт обновляется после MCP-мутаций.
-5. Панель скрывается через `setChatOpen(false)`; кнопка «Чат» в шапке секции возвращает её.
+5. Спиннер (`Loader2`) на время запроса; ошибки — inline в ленте (`isError`).
+6. Панель скрывается через `setChatOpen(false)`; кнопка «Чат» в шапке возвращает её.
 
 ## Модалка задачи
 
 `components/task-details-dialog.tsx`:
 
 - Открывается при ненулевом `selectedTaskId`.
-- Поля через `react-hook-form` (read-only display): название, описание, исполнитель, даты, зависимости с подписью предшественников.
+- Поля через `react-hook-form` (read-only display): название, описание, исполнитель, приоритет, даты, зависимости с подписью предшественников.
 - Правки плана в MVP — через чат, не через форму.
 
 ## Zustand
@@ -206,12 +227,13 @@ npm install
 npm run dev
 ```
 
-Нужен запущенный бэкенд на порту 8000 (или корректный `VITE_API_URL`) и `OPENROUTER_API_KEY` для чата.
+Нужен запущенный бэкенд на порту 8000 (или корректный `VITE_API_URL`) и `OPENROUTER_API_KEY` для чата. Для демо без Excel: `python seed.py` из `backend/`.
 
 ## Планируемое (этап 5+)
 
-- Экспорт текущего кеша задач в Excel (`xlsx`)
-- Лоадеры, скелетоны, тосты
+- Экспорт текущего кеша задач в Excel (`xlsx`) — **не реализовано**
+- Скелетоны загрузки и тосты ошибок — **не реализовано** (есть текстовый лоадер и inline-ошибки)
+- Демо-файл `.xlsx` в репозитории — **нет** (есть DB-seed)
 
 ## Связанные документы
 

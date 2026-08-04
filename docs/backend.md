@@ -1,6 +1,6 @@
 # Backend — документация
 
-API-сервис Repka на FastAPI: хранение задач, bulk-импорт и AI-чат с MCP-инструментами для изменения плана.
+API-сервис Repka на FastAPI: хранение задач, bulk-импорт, сидинг демо-данных и AI-чат с MCP-инструментами для изменения плана.
 
 ## Стек
 
@@ -16,6 +16,7 @@ API-сервис Repka на FastAPI: хранение задач, bulk-импо�
 `backend/app/main.py`:
 
 - Создаёт таблицы (`Base.metadata.create_all`)
+- Вызывает `ensure_sqlite_columns()` (добавление/миграция колонки `priority` на уже существующих SQLite)
 - CORS из `settings.cors_origins` (dev: Vite на 5173)
 - Роутеры: `tasks`, `chat`
 - `GET /health` → `{"status": "ok"}`
@@ -41,6 +42,7 @@ API-сервис Repka на FastAPI: хранение задач, bulk-импо�
 - `create_engine` + `SessionLocal`
 - для SQLite: `check_same_thread=False`
 - `get_db()` — dependency FastAPI (yield session, close в `finally`)
+- `ensure_sqlite_columns()` — для SQLite: `ALTER TABLE` с `priority`, если колонки нет; миграция старых EN-лейблов (`Low`/`Medium`/…) → русские канонические значения
 
 Переход на PostgreSQL: выставить, например,  
 `DATABASE_URL=postgresql+psycopg://user:pass@host/db` — модели менять не нужно.
@@ -58,12 +60,16 @@ API-сервис Repka на FastAPI: хранение задач, bulk-импо�
 | `start_date` | Date | Дата начала |
 | `duration` | int | Длительность (дни) |
 | `predecessors` | String(255), nullable | ID предшественников через запятую (`"1,2"`) |
+| `priority` | String(32) | Приоритет (см. enum ниже); default `Средний` |
+
+`TaskPriority` (`str` Enum): `Критический`, `Высокий`, `Средний`, `Низкий`, `Опционально`.
 
 ## Pydantic-схемы
 
 `app/schemas.py`:
 
-- `TaskCreate` / `TaskRead` — CRUD-поля задачи
+- `TaskCreate` / `TaskRead` — CRUD-поля задачи, включая `priority`
+- `normalize_priority` — алиасы (ru/en: `high` → `Высокий`, `critical` → `Критический`, …); пустое/неизвестное → `Средний`
 - `TaskBulkCreate` — `{ tasks: TaskCreate[] }` (минимум 1)
 - `ChatRequest` — `{ message, history?: { role, content }[] }`
 - `ChatResponse` — `{ reply, tools_used: string[] }`
@@ -98,13 +104,14 @@ API-сервис Repka на FastAPI: хранение задач, bulk-импо�
       "assignee": "Иван",
       "start_date": "2026-08-01",
       "duration": 5,
-      "predecessors": null
+      "predecessors": null,
+      "priority": "Высокий"
     }
   ]
 }
 ```
 
-Ответ: созданные `TaskRead[]`.
+Ответ: созданные `TaskRead[]`. Поле `priority` опционально в запросе (default `Средний`); в ответе всегда присутствует.
 
 ### Чат — `app/routers/chat.py`
 
@@ -134,14 +141,14 @@ API-сервис Repka на FastAPI: хранение задач, bulk-импо�
 
 `app/agent.py` — `run_chat(message, history, db, settings)`:
 
-1. Читает все задачи, вставляет markdown-таблицу в **system prompt** (`format_tasks_for_prompt`).
+1. Читает все задачи, вставляет markdown-таблицу в **system prompt** (`format_tasks_for_prompt`, колонки включают `priority`).
 2. Собирает messages: system + history + текущее user-сообщение.
 3. Берёт схемы tools из MCP (`mcp.list_tools()`), маппит в OpenAI function tools.
 4. Биндит DB-сессию через `set_tool_db` (ContextVar) на время цикла.
 5. До **6** раундов (`MAX_TOOL_ROUNDS`): completion → при tool_calls вызывает `mcp.call_tool` → результат в role `tool` → снова LLM.
 6. Возвращает `(reply_text, tools_used)`.
 
-Системный промпт задаёт роль «Repka», правила резолва задач по ID/title и ответ на языке пользователя (в т.ч. русском). Агент **не** создаёт и **не** удаляет задачи — только три tool’а ниже.
+Системный промпт задаёт роль «Repka», правила резолва задач по ID/title и ответ на языке пользователя (в т.ч. русском). Агент **не** создаёт и **не** удаляет задачи — только три tool’а ниже. Отдельного tool для смены `priority` нет.
 
 Клиент OpenAI: `AsyncOpenAI` с `base_url` OpenRouter и заголовками `HTTP-Referer` / `X-Title`.
 
@@ -164,6 +171,17 @@ API-сервис Repka на FastAPI: хранение задач, bulk-импо�
 
 После успешной мутации: `commit` + `refresh`. Ошибки tool’а откатывают сессию (`rollback` в агенте) и передаются модели как текст ошибки.
 
+## Демо-сидинг
+
+`backend/seed.py` — скрипт заполнения БД демо-планом (~130 задач, 10 исполнителей, горизонт ~3 месяца, FS-зависимости, приоритеты).
+
+```bash
+cd backend
+python seed.py
+```
+
+Перезаписывает все строки в `tasks`. Удобно для локальной демо без Excel-импорта.
+
 ## Запуск
 
 ```bash
@@ -184,17 +202,20 @@ uvicorn app.main:app --reload --port 8000
 ## Структура модулей
 
 ```
-backend/app/
-├── main.py         # app, middleware, /health
-├── config.py       # Settings
-├── database.py     # engine, get_db
-├── models.py       # Task ORM
-├── schemas.py      # request/response DTO
-├── agent.py        # LLM loop + tools
-├── mcp_tools.py    # move / assign / dependency
-└── routers/
-    ├── tasks.py    # GET /, POST /bulk
-    └── chat.py     # POST /chat
+backend/
+├── app/
+│   ├── main.py         # app, middleware, /health, ensure_sqlite_columns
+│   ├── config.py       # Settings
+│   ├── database.py     # engine, get_db, SQLite column migrate
+│   ├── models.py       # Task ORM + TaskPriority
+│   ├── schemas.py      # request/response DTO + normalize_priority
+│   ├── agent.py        # LLM loop + tools
+│   ├── mcp_tools.py    # move / assign / dependency
+│   └── routers/
+│       ├── tasks.py    # GET /, POST /bulk
+│       └── chat.py     # POST /chat
+├── seed.py             # демо-данные (~130 задач)
+└── requirements.txt
 ```
 
 ## Связанные документы
