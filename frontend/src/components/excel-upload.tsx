@@ -1,42 +1,77 @@
 import { useCallback, useRef, useState, type DragEvent, type ChangeEvent } from "react"
 import { FileSpreadsheet, Upload } from "lucide-react"
+import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
-import { parseExcelFile } from "@/lib/parse-excel"
+import { parseExcelFile, type ImportRowIssue } from "@/lib/parse-excel"
 import type { ExcelTask } from "@/lib/task-schema"
 
 type ExcelUploadProps = {
-  onParsed: (tasks: ExcelTask[]) => void | Promise<void>
+  onConfirm: (tasks: ExcelTask[]) => void | Promise<void>
   isUploading?: boolean
 }
 
 const ACCEPT = ".xlsx,.xls"
+const TOAST_ISSUE_LIMIT = 5
 
-export function ExcelUpload({ onParsed, isUploading = false }: ExcelUploadProps) {
+function formatIssuesToast(
+  stats: { total: number; success: number; errors: number; duplicates: number },
+  errors: ImportRowIssue[],
+  duplicates: ImportRowIssue[],
+): { title: string; description: string } {
+  const title = `Импорт отклонён: ошибок ${stats.errors}, дубликатов ${stats.duplicates} (из ${stats.total})`
+  const lines = [...errors, ...duplicates].slice(0, TOAST_ISSUE_LIMIT).map((item) => {
+    const label = item.title ? ` «${item.title}»` : ""
+    return `Строка ${item.row}${label}: ${item.message}`
+  })
+  const rest = stats.errors + stats.duplicates - lines.length
+  if (rest > 0) lines.push(`…и ещё ${rest}`)
+  return { title, description: lines.join("\n") }
+}
+
+export function ExcelUpload({ onConfirm, isUploading = false }: ExcelUploadProps) {
   const inputRef = useRef<HTMLInputElement>(null)
   const [isDragging, setIsDragging] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [isParsing, setIsParsing] = useState(false)
+  const [fatalError, setFatalError] = useState<string | null>(null)
 
   const handleFile = useCallback(
     async (file: File | undefined) => {
       if (!file) return
-      setError(null)
+      setFatalError(null)
 
       const lower = file.name.toLowerCase()
       if (!lower.endsWith(".xlsx") && !lower.endsWith(".xls")) {
-        setError("Поддерживаются только файлы .xlsx / .xls")
+        const message = "Поддерживаются только файлы .xlsx / .xls"
+        setFatalError(message)
+        toast.error(message)
         return
       }
 
+      setIsParsing(true)
       try {
-        const tasks = await parseExcelFile(file)
-        await onParsed(tasks)
+        const result = await parseExcelFile(file)
+        if (result.hasIssues) {
+          const { title, description } = formatIssuesToast(
+            result.stats,
+            result.errors,
+            result.duplicates,
+          )
+          toast.error(title, { description, duration: 8000 })
+          return
+        }
+        await onConfirm(result.valid)
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Не удалось разобрать файл")
+        const message =
+          err instanceof Error ? err.message : "Не удалось разобрать файл"
+        setFatalError(message)
+        toast.error(message)
+      } finally {
+        setIsParsing(false)
       }
     },
-    [onParsed],
+    [onConfirm],
   )
 
   const onDrop = useCallback(
@@ -55,6 +90,8 @@ export function ExcelUpload({ onParsed, isUploading = false }: ExcelUploadProps)
     },
     [handleFile],
   )
+
+  const busy = isUploading || isParsing
 
   return (
     <div className="space-y-3">
@@ -79,7 +116,7 @@ export function ExcelUpload({ onParsed, isUploading = false }: ExcelUploadProps)
           isDragging
             ? "border-primary bg-muted"
             : "border-border hover:bg-muted/50",
-          isUploading && "pointer-events-none opacity-60",
+          busy && "pointer-events-none opacity-60",
         )}
       >
         <div className="rounded-md bg-muted p-3">
@@ -95,14 +132,14 @@ export function ExcelUpload({ onParsed, isUploading = false }: ExcelUploadProps)
           type="button"
           variant="outline"
           size="sm"
-          disabled={isUploading}
+          disabled={busy}
           onClick={(event) => {
             event.stopPropagation()
             inputRef.current?.click()
           }}
         >
           <FileSpreadsheet data-icon="inline-start" />
-          {isUploading ? "Загрузка…" : "Выбрать файл"}
+          {isParsing ? "Проверка…" : isUploading ? "Загрузка…" : "Выбрать файл"}
         </Button>
         <input
           ref={inputRef}
@@ -112,9 +149,9 @@ export function ExcelUpload({ onParsed, isUploading = false }: ExcelUploadProps)
           onChange={onChange}
         />
       </div>
-      {error ? (
+      {fatalError ? (
         <p className="text-sm text-destructive" role="alert">
-          {error}
+          {fatalError}
         </p>
       ) : null}
     </div>

@@ -1,6 +1,7 @@
 import { useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { MessageSquare, Upload } from "lucide-react"
+import { Download, MessageSquare, Upload } from "lucide-react"
+import { toast } from "sonner"
 
 import { bulkCreateTasks, fetchTasks } from "@/api/tasks"
 import { ChatPanel } from "@/components/chat-panel"
@@ -17,6 +18,8 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog"
+import { GanttLoadingSkeleton } from "@/components/ui/skeleton"
+import { downloadTasksExcel } from "@/lib/export-excel"
 import type { ExcelTask } from "@/lib/task-schema"
 import { useUiStore } from "@/stores/ui-store"
 import { cn } from "@/lib/utils"
@@ -36,13 +39,32 @@ export default function App() {
 
   const uploadMutation = useMutation({
     mutationFn: (tasks: ExcelTask[]) => bulkCreateTasks(tasks),
-    onSuccess: () => {
+    onSuccess: (saved) => {
       void queryClient.invalidateQueries({ queryKey: TASKS_KEY })
       setImportOpen(false)
+      toast.success(`Импортировано задач: ${saved.length}`)
+    },
+    onError: (error) => {
+      toast.error(
+        error instanceof Error ? error.message : "Не удалось сохранить задачи",
+      )
     },
   })
 
   const tasks = tasksQuery.data ?? []
+
+  const handleExport = () => {
+    void (async () => {
+      try {
+        await downloadTasksExcel(tasks)
+        toast.success(`Экспортировано задач: ${tasks.length}`)
+      } catch (error) {
+        toast.error(
+          error instanceof Error ? error.message : "Не удалось экспортировать",
+        )
+      }
+    })()
+  }
 
   return (
     <main className="flex h-svh flex-col overflow-hidden bg-background">
@@ -67,7 +89,13 @@ export default function App() {
             </Button>
           ) : null}
 
-          <Dialog open={importOpen} onOpenChange={setImportOpen}>
+          <Dialog
+            open={importOpen}
+            onOpenChange={(open) => {
+              setImportOpen(open)
+              if (!open) uploadMutation.reset()
+            }}
+          >
             <DialogTrigger
               render={
                 <Button type="button" variant="outline" size="sm">
@@ -80,13 +108,14 @@ export default function App() {
               <DialogHeader>
                 <DialogTitle>Импорт Excel</DialogTitle>
                 <DialogDescription>
-                  Обязательные колонки: title, start_date, duration. Опционально:
-                  description, assignee, predecessors, priority.
+                  Колонки: Задача, Описание, Исполнитель, Дата начала,
+                  Длительность, Предшественники, Приоритет. Обязательны: Задача,
+                  Дата начала, Длительность.
                 </DialogDescription>
               </DialogHeader>
               <ExcelUpload
                 isUploading={uploadMutation.isPending}
-                onParsed={async (parsed) => {
+                onConfirm={async (parsed) => {
                   await uploadMutation.mutateAsync(parsed)
                 }}
               />
@@ -99,15 +128,24 @@ export default function App() {
               ) : null}
             </DialogContent>
           </Dialog>
+
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={tasks.length === 0 || tasksQuery.isLoading}
+            onClick={handleExport}
+          >
+            <Download data-icon="inline-start" />
+            Экспорт
+          </Button>
         </div>
       </header>
 
       <section className="flex min-h-0 flex-1 flex-col overflow-hidden lg:flex-row">
         <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-hidden p-4 sm:p-6">
           {tasksQuery.isLoading ? (
-            <div className="flex min-h-0 flex-1 items-center justify-center text-sm text-muted-foreground">
-              Загрузка задач…
-            </div>
+            <GanttLoadingSkeleton className="min-h-0" />
           ) : tasksQuery.isError ? (
             <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-sm text-destructive">
               Не удалось загрузить задачи. Запущен ли API на порту 8000?

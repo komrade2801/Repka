@@ -28,4 +28,6 @@ npm run dev
 Фронтенд: `http://localhost:5173`  
 API / Swagger: `http://127.0.0.1:8000/docs`
 
+Демо Excel для импорта: [`samples/demo-tasks.xlsx`](samples/demo-tasks.xlsx) (~250 задач).
+
 Подробности — в [docs/app.md](docs/app.md).

@@ -3,6 +3,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query"
 import axios from "axios"
 import { Loader2, MessageSquare, SendHorizontal, X } from "lucide-react"
 import Markdown from "react-markdown"
+import { toast } from "sonner"
 
 import { sendChatMessage } from "@/api/chat"
 import { Button } from "@/components/ui/button"
@@ -100,14 +101,19 @@ export function ChatPanel({ className }: ChatPanelProps) {
         toolsUsed: data.tools_used,
       })
       void queryClient.invalidateQueries({ queryKey: TASKS_KEY })
+      if (data.tools_used?.length) {
+        toast.success(`План обновлён (${data.tools_used.join(", ")})`)
+      }
     },
     onError: (error) => {
+      const message = chatErrorMessage(error)
       addMessage({
         id: nextId(),
         role: "assistant",
-        content: chatErrorMessage(error),
+        content: message,
         isError: true,
       })
+      toast.error(message)
     },
   })
 

@@ -31,10 +31,11 @@ npm run preview  # превью production-сборки
 `src/App.tsx`:
 
 - `useQuery(['tasks'], fetchTasks)` — загрузка плана
-- `useMutation(bulkCreateTasks)` — импорт; `onSuccess` → `invalidateQueries(['tasks'])` и закрытие диалога
-- Шапка «Repka / BIOCAD» + `RepkaLogo`, кнопки **Чат** / **Импорт**, область `GanttChart` + боковая `ChatPanel` (side-by-side)
+- `useMutation(bulkCreateTasks)` — импорт; `onSuccess` → `invalidateQueries(['tasks'])`, закрытие диалога, toast
+- Шапка «Repka / BIOCAD» + `RepkaLogo`, кнопки **Чат** / **Импорт** / **Экспорт** (импорт и экспорт рядом)
 - `TaskDetailsDialog` — модалка выбранной задачи
-- Состояния: текст «Загрузка задач…» / ошибка API / Гантт с данными
+- Состояния: скелетон Ганта / ошибка API / Гантт с данными
+- `AppToaster` (`sonner`) — уведомления об импорте, экспорте и чате
 
 ## Структура `src/`
 
@@ -51,7 +52,8 @@ src/
 │   └── chat.ts           # ChatMessage, ChatRequest/Response
 ├── lib/
 │   ├── api.ts            # axios instance
-│   ├── parse-excel.ts    # File → ExcelTask[]
+│   ├── parse-excel.ts    # File → ImportParseResult (valid / errors / duplicates)
+│   ├── export-excel.ts   # Task[] → скачивание .xlsx
 │   ├── task-schema.ts    # zod-схемы импорта
 │   ├── gantt-mapper.ts   # Task → gantt-task-react + цвета priority
 │   ├── date.ts           # date helpers
@@ -64,7 +66,7 @@ src/
     ├── chat-panel.tsx
     ├── task-details-dialog.tsx
     ├── repka-logo.tsx
-    └── ui/               # button, card, dialog, input, textarea, label, scroll-area
+    └── ui/               # button, card, dialog, input, textarea, label, scroll-area, skeleton, sonner
 ```
 
 ## API-клиент
@@ -98,28 +100,50 @@ timeout: 10_000
 ### UI — `ExcelUpload`
 
 - Drag&drop и выбор файла (`.xlsx` / `.xls`)
-- Вызов `parseExcelFile` → `onParsed(tasks)`
-- Локальные ошибки валидации / чтения; флаг `isUploading` от мутации родителя
+- Вызов `parseExcelFile` → результат с валидными строками / ошибками / дубликатами
+- Если замечаний нет — `onConfirm(valid)` и сохранение через API
+- Если есть ошибки или дубликаты — **импорт не выполняется**, toast (`sonner`) со статистикой и примерами строк
+- Fatal-ошибки файла (нет листа, нет колонок, пустой файл) — toast + текст в модалке
+- Флаг `isUploading` от мутации родителя
 
 ### Парсинг — `parseExcelFile`
 
 1. `FileReader` → `XLSX.read`
 2. Первый лист → `sheet_to_json`
-3. Нормализация заголовков (`Title` → `title`, пробелы → `_`)
-4. Проверка обязательных колонок
-5. `excelTasksSchema.safeParse`
+3. Маппинг русских заголовков (`Задача` → `title`) и legacy EN-ключей
+4. Проверка обязательных колонок (Задача, Дата начала, Длительность)
+5. Построчный `excelTaskSchema.safeParse` (пустые строки пропускаются)
+6. Дубликаты: повтор названия задачи без учёта регистра (первая строка остаётся успешной)
 
-### Схема — `task-schema.ts`
+### Схема — `task-schema.ts` + `excel-columns.ts`
 
-Обязательные: `title`, `start_date`, `duration`.  
-Опциональные: `description`, `assignee`, `predecessors`, `priority`.
+Обязательные: `Задача`, `Дата начала`, `Длительность`.  
+Опциональные: `Описание`, `Исполнитель`, `Предшественники`, `Приоритет`.
 
 Особенности:
 
 - Excel serial date → UTC-дата → `YYYY-MM-DD`
-- `duration` — целое ≥ 1
+- `Длительность` — число ≥ 1 (сохраняется как целое)
 - пустые опциональные поля → `null`
-- `priority` — алиасы (`high`/`высокий`/…) → канон; пустое → `Средний`
+- `Приоритет` — только известные алиасы / канон; неизвестное значение → ошибка строки
+- `Предшественники` — ID через запятую (`1,2`); иначе ошибка строки
+
+## Экспорт Excel
+
+`lib/export-excel.ts` (ExcelJS) + кнопка **Экспорт** в шапке:
+
+- Берёт текущий массив задач из `useQuery(['tasks'])`
+- Лист `Задачи`, русские заголовки с заглавной буквы
+- Заголовок: жирный, размер 14; тело: 11
+- Ширина колонок по контенту (с min/max)
+- Закреплённая первая строка
+- Имя файла: `repka-tasks-YYYY-MM-DD.xlsx`
+
+Демо-файл для импорта: `samples/demo-tasks.xlsx` (~250 задач). Перегенерация:
+
+```bash
+node scripts/generate-demo-excel.mjs
+```
 
 ## Диаграмма Ганта
 
@@ -229,11 +253,10 @@ npm run dev
 
 Нужен запущенный бэкенд на порту 8000 (или корректный `VITE_API_URL`) и `OPENROUTER_API_KEY` для чата. Для демо без Excel: `python seed.py` из `backend/`.
 
-## Планируемое (этап 5+)
+## Планируемое (этап 6+)
 
-- Экспорт текущего кеша задач в Excel (`xlsx`) — **не реализовано**
-- Скелетоны загрузки и тосты ошибок — **не реализовано** (есть текстовый лоадер и inline-ошибки)
-- Демо-файл `.xlsx` в репозитории — **нет** (есть DB-seed)
+- Деплой Render / Vercel
+- Расширенный README, `Roadmap-to-production.md`, демо-видео
 
 ## Связанные документы
 

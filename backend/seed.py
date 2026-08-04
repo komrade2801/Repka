@@ -179,7 +179,7 @@ PHASES: list[tuple[str, list[tuple[str, str, tuple[int, int]]]]] = [
 ]
 
 
-def _build_task_specs(count: int = 130) -> list[dict]:
+def _build_task_specs(count: int = 250) -> list[dict]:
     """Build task dicts with dates spanning ~3 months and FS dependencies."""
     today = date.today()
     horizon_end = today + timedelta(days=90)
@@ -263,7 +263,7 @@ def _build_task_specs(count: int = 130) -> list[dict]:
     return specs
 
 
-def seed(count: int = 130) -> int:
+def seed(count: int = 250) -> int:
     Base.metadata.create_all(bind=engine)
     ensure_sqlite_columns()
 
@@ -281,5 +281,5 @@ def seed(count: int = 130) -> int:
 
 
 if __name__ == "__main__":
-    n = seed(130)
+    n = seed(250)
     print(f"Seeded {n} tasks for {len(ASSIGNEES)} assignees (horizon ~3 months).")
