@@ -167,14 +167,15 @@ const ASSIGNEE_COL = 150
 const PRIORITY_COL = 120
 /** Month view: colored dot only. */
 const PRIORITY_COL_COMPACT = 36
-const LIST_MIN = 160
-const LIST_MAX = 790
+/** Resizable title column only — optional cols do not inflate it when hidden. */
+const TITLE_MIN = 96
+const TITLE_MAX = 480
 /** Reserved width for the library vertical scrollbar when content overflows. */
 const V_SCROLL_W = 12
-const LIST_DEFAULT: Record<ChartScale, number> = {
-  day: 650,
-  week: 680,
-  month: 560,
+const TITLE_DEFAULT: Record<ChartScale, number> = {
+  day: 280,
+  week: 300,
+  month: 280,
 }
 
 const PRIORITY_RANK: Record<TaskPriority, number> = {
@@ -288,7 +289,7 @@ function formatMonthLabel(date: Date): string {
 }
 
 function buildListLayout(
-  totalWidth: number,
+  titlePreferred: number,
   showAssignee: boolean,
   showPriority: boolean,
   showDatesPref: boolean,
@@ -297,7 +298,7 @@ function buildListLayout(
   const showDates = showDatesPref
   const showAssigneeEff = showAssignee
   const showPriorityEff = showPriority
-  if (totalWidth <= 0) {
+  if (titlePreferred <= 0) {
     return {
       title: 0,
       assignee: 0,
@@ -317,12 +318,7 @@ function buildListLayout(
       : PRIORITY_COL
     : 0
   const dates = showDates ? DATES_COL : 0
-  const minNeeded = 96 + assignee + priority + dates
-  const total = Math.min(
-    LIST_MAX,
-    Math.max(LIST_MIN, minNeeded, totalWidth),
-  )
-  const title = Math.max(96, total - assignee - priority - dates)
+  const title = Math.max(TITLE_MIN, Math.min(TITLE_MAX, titlePreferred))
   return {
     title,
     assignee,
@@ -706,13 +702,14 @@ export function GanttChart({
     baseColWidth: 80,
     columnRemainder: 0,
     timelineWidth: 560,
-    listWidth: LIST_DEFAULT.day,
+    listWidth: TITLE_DEFAULT.day,
     ganttHeight: 400,
     needsHorizontalScroll: false,
     needsVerticalScroll: false,
     vScrollWidth: 0,
   })
-  const [listWidth, setListWidth] = useState(() => LIST_DEFAULT.day)
+  /** Preferred width of the «Задача» column (splitter); optional cols add on top. */
+  const [titleWidth, setTitleWidth] = useState(() => TITLE_DEFAULT.day)
   const [listCollapsed, setListCollapsed] = useState(false)
   const [showAssigneeCol, setShowAssigneeCol] = useState(true)
   const [showPriorityCol, setShowPriorityCol] = useState(true)
@@ -721,7 +718,9 @@ export function GanttChart({
   const [searchQuery, setSearchQuery] = useState("")
   const [sortKey, setSortKey] = useState<SortKey>("title")
   const [sortDir, setSortDir] = useState<SortDir>("asc")
-  const [timelineLeft, setTimelineLeft] = useState(LIST_DEFAULT.day)
+  const [timelineLeft, setTimelineLeft] = useState(
+    () => TITLE_DEFAULT.day + ASSIGNEE_COL + PRIORITY_COL + DATES_COL,
+  )
   /** Current view is settled and safe to show. */
   const [isReady, setIsReady] = useState(false)
   /**
@@ -757,13 +756,13 @@ export function GanttChart({
   const listLayout = useMemo(
     () =>
       buildListLayout(
-        listCollapsed ? 0 : listWidth,
+        listCollapsed ? 0 : titleWidth,
         showAssigneeCol,
         showPriorityCol,
         showDatesCol,
         scale === "month",
       ),
-    [listWidth, listCollapsed, showAssigneeCol, showPriorityCol, showDatesCol, scale],
+    [titleWidth, listCollapsed, showAssigneeCol, showPriorityCol, showDatesCol, scale],
   )
 
   const listWidthForShell = listCollapsed ? 0 : listLayout.total
@@ -831,39 +830,30 @@ export function GanttChart({
   const prevLayoutKeyRef = useRef<string | null>(null)
   const hardWindowChangeRef = useRef(false)
 
-  const listMinWidth = useMemo(() => {
-    const assignee = showAssigneeCol ? ASSIGNEE_COL : 0
-    const priority = showPriorityCol
-      ? scale === "month"
-        ? PRIORITY_COL_COMPACT
-        : PRIORITY_COL
-      : 0
-    const dates = showDatesCol ? DATES_COL : 0
-    return Math.max(LIST_MIN, 96 + assignee + priority + dates)
-  }, [showAssigneeCol, showPriorityCol, showDatesCol, scale])
+  const listMinTitleWidth = TITLE_MIN
 
   const onResizePointerDown = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
       if (listCollapsed) return
       event.preventDefault()
-      resizeDrag.current = { startX: event.clientX, startWidth: listWidth }
+      resizeDrag.current = { startX: event.clientX, startWidth: titleWidth }
       event.currentTarget.setPointerCapture(event.pointerId)
     },
-    [listCollapsed, listWidth],
+    [listCollapsed, titleWidth],
   )
 
   const onResizePointerMove = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
       if (!resizeDrag.current) return
       const delta = event.clientX - resizeDrag.current.startX
-      setListWidth(
+      setTitleWidth(
         Math.min(
-          LIST_MAX,
-          Math.max(listMinWidth, resizeDrag.current.startWidth + delta),
+          TITLE_MAX,
+          Math.max(listMinTitleWidth, resizeDrag.current.startWidth + delta),
         ),
       )
     },
-    [listMinWidth],
+    [listMinTitleWidth],
   )
 
   const onResizePointerUp = useCallback(
@@ -1097,7 +1087,7 @@ export function GanttChart({
     hardWindowChangeRef.current = true
     setIsReady(false)
     setScale(next)
-    setListWidth(LIST_DEFAULT[next])
+    setTitleWidth(TITLE_DEFAULT[next])
   }
 
   const shiftView = (direction: -1 | 0 | 1) => {
