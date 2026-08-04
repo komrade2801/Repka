@@ -15,7 +15,6 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Plus,
-  User,
 } from "lucide-react"
 import { Gantt, ViewMode, type Task as GanttTask } from "gantt-task-react"
 import "gantt-task-react/dist/index.css"
@@ -34,10 +33,7 @@ import {
   startOfMonth,
   startOfWeekMonday,
 } from "@/lib/date"
-import {
-  formatAssigneeInitials,
-  toGanttTasks,
-} from "@/lib/gantt-mapper"
+import { toGanttTasks } from "@/lib/gantt-mapper"
 import { useUiStore } from "@/stores/ui-store"
 import type { Task } from "@/types/task"
 import { cn } from "@/lib/utils"
@@ -153,15 +149,15 @@ const SHELL_BORDER_Y = 2
 const ROW_HEIGHT = 44
 const MIN_COL_WITH_SCROLL = 36
 const DATES_COL = 96
-const ASSIGNEE_COL = 40
+const ASSIGNEE_COL = 150
 const LIST_MIN = 160
-const LIST_MAX = 520
+const LIST_MAX = 670
 /** Reserved width for the library vertical scrollbar when content overflows. */
 const V_SCROLL_W = 12
 const LIST_DEFAULT: Record<ChartScale, number> = {
-  day: 380,
-  week: 410,
-  month: 370,
+  day: 530,
+  week: 560,
+  month: 520,
 }
 
 type ChartMetrics = {
@@ -472,26 +468,19 @@ function lockTimelinePad(timeline: HTMLElement | null, padPx: number) {
   if (timeline.scrollLeft !== padPx) timeline.scrollLeft = padPx
 }
 
-function AssigneeAvatar({ name }: { name: string | null | undefined }) {
+function AssigneeName({ name }: { name: string | null | undefined }) {
+  const label = name?.trim() || "—"
   const tip = name?.trim() || "Без исполнителя"
-  const chipClass =
-    "inline-flex size-7 shrink-0 cursor-default select-none items-center justify-center rounded-full border border-border bg-muted/50 font-mono text-[10px] font-medium tracking-tight"
-  if (!name?.trim()) {
-    return (
-      <span
-        data-gantt-assignee-tip={tip}
-        className={cn(chipClass, "text-muted-foreground")}
-      >
-        —
-      </span>
-    )
-  }
   return (
     <span
       data-gantt-assignee-tip={tip}
-      className={cn(chipClass, "text-foreground")}
+      title={tip}
+      className={cn(
+        "block min-w-0 truncate text-[13px] leading-tight",
+        name?.trim() ? "text-foreground" : "text-muted-foreground",
+      )}
     >
-      {formatAssigneeInitials(name)}
+      {label}
     </span>
   )
 }
@@ -761,7 +750,11 @@ export function GanttChart({
           { key: "title", label: "Задача", width: listLayout.title },
         ]
         if (listLayout.showAssignee) {
-          cols.push({ key: "assignee", label: "", width: listLayout.assignee })
+          cols.push({
+            key: "assignee",
+            label: "Исполнитель",
+            width: listLayout.assignee,
+          })
         }
         if (listLayout.showDates) {
           cols.push({ key: "dates", label: "Сроки", width: listLayout.dates })
@@ -787,7 +780,6 @@ export function GanttChart({
                   className={cn(
                     "box-border flex shrink-0 items-center overflow-hidden px-1 text-xs font-medium text-muted-foreground",
                     col.key === "dates" && "is-dates-col",
-                    col.key === "assignee" && "justify-center",
                   )}
                   style={{
                     width: col.width,
@@ -795,16 +787,7 @@ export function GanttChart({
                     maxWidth: col.width,
                   }}
                 >
-                  {col.key === "assignee" ? (
-                    <span title="Исполнитель" className="inline-flex">
-                      <User
-                        className="size-3.5 shrink-0"
-                        aria-label="Исполнитель"
-                      />
-                    </span>
-                  ) : col.label ? (
-                    <span className="truncate">{col.label}</span>
-                  ) : null}
+                  {col.label ? <span className="truncate">{col.label}</span> : null}
                 </div>
               ))}
             </div>
@@ -884,14 +867,14 @@ export function GanttChart({
                   </div>
                   {listLayout.showAssignee ? (
                     <div
-                      className="_3lLk3 flex items-center justify-center"
+                      className="_3lLk3 flex items-center px-1"
                       style={{
                         minWidth: listLayout.assignee,
                         maxWidth: listLayout.assignee,
                         height: rowHeight,
                       }}
                     >
-                      <AssigneeAvatar name={source?.assignee} />
+                      <AssigneeName name={source?.assignee} />
                     </div>
                   ) : null}
                   {listLayout.showDates ? (

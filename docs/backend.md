@@ -34,7 +34,7 @@ API-сервис Repka на FastAPI: хранение задач, CRUD, append-�
 | `cors_origins` | — | Список origin (в коде: localhost/127.0.0.1:5173) |
 | `openrouter_api_key` | `OPENROUTER_API_KEY` | Без ключа `/chat` отвечает 503 |
 | `openrouter_base_url` | `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` |
-| `openrouter_model` | `OPENROUTER_MODEL` | `anthropic/claude-sonnet-4.6` |
+| `openrouter_model` | `OPENROUTER_MODEL` | `openai/gpt-4o-mini` |
 
 ## База данных
 
@@ -177,7 +177,8 @@ Tools: аналитика/поиск + move/assign/create/delete, duration/prior
 | --- | --- | --- |
 | `get_project_summary` | `assignee?`, `priority?` | Агрегаты COUNT / GROUP BY |
 | `search_tasks` | `query?`, `assignee?`, `priority?`, `start_from/to?`, `finish_from/to?`, `limit=10` | SQL-поиск/фильтр (finish = start + duration) |
-| `move_task` | `task_id`, `new_start_date` | `start_date` |
+| `move_task` | `task_id`, `new_start_date` | `start_date` (`dd.mm.yy`) |
+| `bulk_move_tasks` / `bulk_assign_tasks` / `bulk_delete_tasks` | `task_ids` + значение | Массовые мутации (до 100 id) |
 | `assign_task` | `task_id`, `assignee` | Исполнитель (`` → сброс) |
 | `add_dependency` / `remove_dependency` | `task_id`, `predecessor_id` | FS / снятие (слой A) |
 | `create_task` | `title`, `start_date`, … | Создание |

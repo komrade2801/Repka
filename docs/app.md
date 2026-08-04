@@ -96,7 +96,7 @@ python seed.py          # ~250 задач в SQLite
 | `DATABASE_URL` | SQLAlchemy URL | `sqlite:///./repka.db` |
 | `OPENROUTER_API_KEY` | Ключ OpenRouter | — (обязателен для `/chat`) |
 | `OPENROUTER_BASE_URL` | Base URL API | `https://openrouter.ai/api/v1` |
-| `OPENROUTER_MODEL` | Модель | `anthropic/claude-sonnet-4.6` |
+| `OPENROUTER_MODEL` | Модель | `openai/gpt-4o-mini` |
 
 Фронтенд:
 

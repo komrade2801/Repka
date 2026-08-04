@@ -18,8 +18,7 @@ class Settings(BaseSettings):
 
     openrouter_api_key: str = ""
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
-    # Claude 3.5 Sonnet is retired on OpenRouter; use current Sonnet (override via OPENROUTER_MODEL).
-    openrouter_model: str = "anthropic/claude-sonnet-4.6"
+    openrouter_model: str = "openai/gpt-4o-mini"
 
 
 @lru_cache

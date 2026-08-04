@@ -287,6 +287,101 @@ def move_task(task_id: int, new_start_date: str) -> str:
     )
 
 
+_BULK_MAX_IDS = 100
+
+
+def _normalize_task_ids(task_ids: list[int]) -> list[int]:
+    if not task_ids:
+        raise ValueError("task_ids must not be empty")
+    cleaned: list[int] = []
+    seen: set[int] = set()
+    for raw in task_ids:
+        tid = int(raw)
+        if tid in seen:
+            continue
+        seen.add(tid)
+        cleaned.append(tid)
+    if len(cleaned) > _BULK_MAX_IDS:
+        raise ValueError(f"task_ids must contain at most {_BULK_MAX_IDS} items")
+    return cleaned
+
+
+def _load_tasks_for_bulk(task_ids: list[int]) -> tuple[list[Task], list[int]]:
+    ids = _normalize_task_ids(task_ids)
+    db = _db()
+    rows = db.query(Task).filter(Task.id.in_(ids)).all()
+    by_id = {t.id: t for t in rows}
+    found = [by_id[i] for i in ids if i in by_id]
+    missing = [i for i in ids if i not in by_id]
+    return found, missing
+
+
+@mcp.tool()
+def bulk_move_tasks(task_ids: list[int], new_start_date: str) -> str:
+    """Move many tasks to the same start date in one call (dd.mm.yy). Prefer this over repeated move_task."""
+    parsed = _parse_date(new_start_date)
+    tasks, missing = _load_tasks_for_bulk(task_ids)
+    if not tasks and missing:
+        raise ValueError(f"No tasks found for ids: {missing}")
+
+    for task in tasks:
+        task.start_date = parsed
+    _db().commit()
+
+    lines = [
+        f"Moved {len(tasks)} task(s) to {format_date_ddmmyy(parsed)}:",
+    ]
+    for task in tasks:
+        lines.append(f"  #{task.id} «{task.title}»")
+    if missing:
+        lines.append(f"missing ids (skipped): {missing}")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def bulk_assign_tasks(task_ids: list[int], new_assignee: str) -> str:
+    """Assign many tasks to the same person in one call. Empty new_assignee clears assignee. Prefer over repeated assign_task."""
+    clean_assignee = _clip(new_assignee, _ASSIGNEE_MAX, "new_assignee")
+    tasks, missing = _load_tasks_for_bulk(task_ids)
+    if not tasks and missing:
+        raise ValueError(f"No tasks found for ids: {missing}")
+
+    label = clean_assignee or "unassigned"
+    for task in tasks:
+        task.assignee = clean_assignee
+    _db().commit()
+
+    lines = [f"Assigned {len(tasks)} task(s) to «{label}»:"]
+    for task in tasks:
+        lines.append(f"  #{task.id} «{task.title}»")
+    if missing:
+        lines.append(f"missing ids (skipped): {missing}")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def bulk_delete_tasks(task_ids: list[int]) -> str:
+    """Delete many tasks in one call and clean predecessor references. Prefer over repeated delete_task."""
+    tasks, missing = _load_tasks_for_bulk(task_ids)
+    if not tasks and missing:
+        raise ValueError(f"No tasks found for ids: {missing}")
+
+    db = _db()
+    deleted: list[tuple[int, str]] = [(t.id, t.title) for t in tasks]
+    for task_id, _title in deleted:
+        strip_predecessor_references(db, task_id)
+    for task in tasks:
+        db.delete(task)
+    db.commit()
+
+    lines = [f"Deleted {len(deleted)} task(s):"]
+    for task_id, title in deleted:
+        lines.append(f"  #{task_id} «{title}»")
+    if missing:
+        lines.append(f"missing ids (skipped): {missing}")
+    return "\n".join(lines)
+
+
 @mcp.tool()
 def assign_task(task_id: int, assignee: str) -> str:
     """Assign (or reassign) a task to a person by name. Empty string clears assignee."""

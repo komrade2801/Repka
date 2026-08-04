@@ -15,6 +15,9 @@ Tools вызываются **in-process** (та же SQLAlchemy-сессия, ч
 | `get_project_summary` | `assignee?`, `priority?` | `COUNT` / `GROUP BY` assignee и priority |
 | `search_tasks` | `query?`, `assignee?`, `priority?`, `start_from/to?`, `finish_from/to?`, `limit=10` | SQL-фильтр; даты `dd.mm.yy`; finish = start + duration |
 | `move_task` | `task_id`, `new_start_date` | Смена `start_date` (`dd.mm.yy`) |
+| `bulk_move_tasks` | `task_ids`, `new_start_date` | Массовый перенос |
+| `bulk_assign_tasks` | `task_ids`, `new_assignee` | Массовое назначение (`` → сброс) |
+| `bulk_delete_tasks` | `task_ids` | Массовое удаление + cleanup |
 | `assign_task` | `task_id`, `assignee` | Исполнитель (`` → сброс) |
 | `add_dependency` / `remove_dependency` | `task_id`, `predecessor_id` | FS-связь / снятие |
 | `create_task` | `title`, `start_date`, … | Создание (autoincrement id) |
@@ -32,7 +35,7 @@ Tools вызываются **in-process** (та же SQLAlchemy-сессия, ч
 4. До `MAX_TOOL_ROUNDS = 6`: completion → `mcp.call_tool` → role `tool`.
 5. Ответ: `(reply, tools_used)`.
 
-Конфиг: `OPENROUTER_API_KEY`, `OPENROUTER_BASE_URL`, `OPENROUTER_MODEL`. На Windows для МСК нужен `tzdata`.
+Конфиг: `OPENROUTER_API_KEY`, `OPENROUTER_BASE_URL`, `OPENROUTER_MODEL` (дефолт `openai/gpt-4o-mini`). На Windows для МСК нужен `tzdata`.
 
 **Расширение:** новый `@mcp.tool()` в `mcp_tools.py` + строка в `SYSTEM_PROMPT`.
 
