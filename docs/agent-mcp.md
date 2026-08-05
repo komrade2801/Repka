@@ -13,11 +13,16 @@ Tools вызываются **in-process** (та же SQLAlchemy-сессия, ч
 | Tool | Аргументы | Действие |
 | --- | --- | --- |
 | `get_project_summary` | `assignee?`, `priority?`, `on_date?`, `active_from?`+`active_to?` | `COUNT` / `GROUP BY`; период — пересечение интервалов |
-| `search_tasks` | `query?`, `assignee?`, `priority?`, `on_date?`, `active_from/to?`, `starts_from/to?`, `ends_from/to?`, `limit=10` | ACTIVE = пересечение; STARTS = по `start_date`; ENDS = по Finish; даты `dd.mm.yy` |
-| `move_task` | `task_id`, `new_start_date` | Смена `start_date` (`dd.mm.yy`) |
-| `bulk_move_tasks` | `task_ids`, `new_start_date` | Массовый перенос |
+| `search_tasks` | `query?`, фильтры дат, `limit=50` (max 250), `ids_only?` | ACTIVE / STARTS / ENDS; `ids_only` — компактный список id |
+| `move_task` | `task_id`, `new_start_date?`, `new_end_date?`, `duration?` | Старт / старт+финиш / только финиш / старт+duration |
+| `shift_tasks` | `task_ids`, `offset_days` | Относительный сдвиг (±дни), duration без изменений |
+| `bulk_move_tasks` | `task_ids`, `new_start_date` | Абсолютный перенос известных id |
 | `bulk_assign_tasks` | `task_ids`, `new_assignee` | Массовое назначение (`` → сброс) |
 | `bulk_delete_tasks` | `task_ids` | Массовое удаление + cleanup |
+| `move_tasks_where` | `new_start_date` + фильтры (≥1) | Перенос **всех** подходящих без пагинации |
+| `shift_tasks_where` | `offset_days` + фильтры (≥1) | Сдвиг **всех** подходящих |
+| `delete_tasks_where` | фильтры (≥1) | Удаление **всех** подходящих + cleanup |
+| `clear_entire_project` | `confirm=true` | Полный wipe плана |
 | `assign_task` | `task_id`, `assignee` | Исполнитель (`` → сброс) |
 | `add_dependency` / `remove_dependency` | `task_id`, `predecessor_id` | FS-связь / снятие |
 | `create_task` | `title`, `start_date`, … | Создание (autoincrement id) |
@@ -27,11 +32,13 @@ Tools вызываются **in-process** (та же SQLAlchemy-сессия, ч
 
 Мутации: `commit` + текст результата. Ошибки → `rollback`, в LLM уходит `Error: …`.
 
+**Выбор формы мутации:** полный wipe → `clear_entire_project`; «все задачи Ивановой / с приоритетом X» → `*_where`; известные id → `bulk_*` / `shift_tasks`. Не использовать search+bulk для полного удаления (пагинация).
+
 ## Цикл `run_chat`
 
 1. System prompt: МСК-дата/день недели + границы текущей недели Пн–Вс; **без** полного снимка задач.
 2. History: только `user` / `assistant` с клиента; перед каждым LLM-вызовом tool stripping (`KEEP_TOOL_RESULT_ROUNDS = 2`).
-3. Grounding: перед мутациями — свежий search/summary. **Список** («какие задачи…») → только `search_tasks`; **счёт** («сколько…») → `get_project_summary`. На неделе/сегодня: ACTIVE `active_from`+`active_to` / `on_date`; «начинаются» → `starts_*`; «заканчиваются» → `ends_*`.
+3. Grounding: перед id-мутациями — `search_tasks` (можно `ids_only`); перед `*_where` / wipe — `get_project_summary` с теми же фильтрами. **Список** → `search_tasks`; **счёт** → `get_project_summary`.
 4. До `MAX_TOOL_ROUNDS = 6`: completion → `mcp.call_tool` → role `tool`.
 5. Ответ: `(reply, tools_used)`. На UI toast «План обновлён» фильтрует read-only (`search_tasks`, `get_project_summary`).
 

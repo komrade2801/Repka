@@ -176,16 +176,19 @@ Tools: аналитика/поиск + move/assign/create/delete, duration/prior
 | Tool | Аргументы | Действие |
 | --- | --- | --- |
 | `get_project_summary` | `assignee?`, `priority?`, `on_date?`, `active_from?`+`active_to?` | Агрегаты COUNT / GROUP BY; даты — пересечение рабочих интервалов |
-| `search_tasks` | `query?`, `assignee?`, `priority?`, `on_date?`, `active_from/to?`, `starts_from/to?`, `ends_from/to?`, `limit=10` | ACTIVE = пересечение; STARTS / ENDS = только старт / финиш |
-| `move_task` | `task_id`, `new_start_date` | `start_date` (`dd.mm.yy`) |
-| `bulk_move_tasks` / `bulk_assign_tasks` / `bulk_delete_tasks` | `task_ids` + значение | Массовые мутации (до 100 id) |
+| `search_tasks` | фильтры, `limit=50` (max 250), `ids_only?` | ACTIVE / STARTS / ENDS; компактный режим для bulk |
+| `move_task` | `task_id`, `new_start_date?`, `new_end_date?`, `duration?` | Гибкий перенос (старт / старт+финиш / только финиш) |
+| `shift_tasks` / `shift_tasks_where` | id-список или фильтры + `offset_days` | Относительный сдвиг (±дни) |
+| `bulk_move_tasks` / `bulk_assign_tasks` / `bulk_delete_tasks` | `task_ids` + значение | Массовые мутации по id (до 250) |
+| `move_tasks_where` / `delete_tasks_where` | фильтры (≥1) + значение | Мутации **всех** подходящих без пагинации |
+| `clear_entire_project` | `confirm=true` | Полный wipe |
 | `assign_task` | `task_id`, `assignee` | Исполнитель (`` → сброс) |
 | `add_dependency` / `remove_dependency` | `task_id`, `predecessor_id` | FS / снятие (слой A) |
 | `create_task` | `title`, `start_date`, … | Создание |
 | `delete_task` | `task_id` | Удаление + cleanup |
 | `update_task_duration` / `update_task_priority` | id + значение | Длительность / приоритет |
 
-Валидация графа — `task_graph` (слой A). Лимиты полей как у HTTP CRUD. Мутации: `commit`/`refresh`; ошибки → `rollback` + текст в LLM.
+Валидация графа — `task_graph` (слой A). Лимиты полей как у HTTP CRUD. Мутации: `commit`/`refresh`; ошибки → `rollback` + текст в LLM. Подробнее: [agent-mcp](./agent-mcp.md).
 
 ## Демо-сидинг
 
@@ -212,8 +215,11 @@ pip install -r requirements.txt
 # DATABASE_URL=sqlite:///./repka.db
 # OPENROUTER_API_KEY=sk-or-...
 
-uvicorn app.main:app --reload --port 8000
+python run_dev.py
+# или: uvicorn app.main:app --reload --port 8000 --timeout-graceful-shutdown 5
 ```
+
+`run_dev.py` перед стартом снимает зависший Repka-uvicorn с порта. На **Windows** использует свой clean-reload (не uvicorn `--reload` / WatchFiles — тот часто зависает на `Reloading...` и оставляет зомби на `:8000`): смотрит только `app/*.py`, шлёт CTRL+BREAK → lifespan dispose → при таймауте `taskkill`. На Unix — uvicorn `--reload` с `reload_dirs=app` и exclude `*.db`/WAL. Везде `timeout_graceful_shutdown=5`. Lifespan + `atexit` закрывают SQLAlchemy engine; для SQLite — `NullPool` + `busy_timeout`.
 
 Файл SQLite по умолчанию создаётся относительно cwd процесса (часто `backend/repka.db`).
 
@@ -235,19 +241,21 @@ uvicorn app.main:app --reload --port 8000
 ```
 backend/
 ├── app/
-│   ├── main.py         # app, middleware, /health, ensure_sqlite_columns
+│   ├── main.py         # app, lifespan, middleware, /health
 │   ├── config.py       # Settings (+ CORS_ORIGINS)
-│   ├── database.py     # engine, get_db, SQLite column migrate
+│   ├── database.py     # engine, get_db, init/dispose, SQLite migrate
 │   ├── models.py       # Task ORM + TaskPriority
 │   ├── schemas.py      # request/response DTO + normalize_priority
 │   ├── agent.py        # LLM loop + tools
 │   ├── mcp_tools.py    # analytics / search / mutations
 │   ├── task_graph.py   # predecessors validation (layer A)
 │   ├── rate_limit.py   # mutate/chat rate limits
+│   ├── request_log.py  # →/← request timing logs
 │   └── routers/
 │       ├── tasks.py    # GET /, POST /, PATCH /{id}, DELETE /{id}, POST /import
 │       └── chat.py     # POST /chat
 ├── Dockerfile
+├── run_dev.py          # local: free port + graceful shutdown + reload
 ├── seed.py
 ├── scripts/            # verify_requirements.py (Linux check)
 └── requirements.txt

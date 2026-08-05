@@ -9,7 +9,7 @@ from __future__ import annotations
 import random
 from datetime import date, timedelta
 
-from app.database import Base, SessionLocal, engine, ensure_sqlite_columns
+from app.database import SessionLocal, dispose_engine, init_db
 from app.models import Task, TaskPriority
 
 # Fixed seed for reproducible demo data
@@ -264,8 +264,7 @@ def _build_task_specs(count: int = 250) -> list[dict]:
 
 
 def seed(count: int = 250) -> int:
-    Base.metadata.create_all(bind=engine)
-    ensure_sqlite_columns()
+    init_db()
 
     specs = _build_task_specs(count)
     db = SessionLocal()
@@ -278,6 +277,7 @@ def seed(count: int = 250) -> int:
         return len(tasks)
     finally:
         db.close()
+        dispose_engine()
 
 
 if __name__ == "__main__":

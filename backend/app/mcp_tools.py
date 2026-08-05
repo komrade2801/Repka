@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from contextvars import ContextVar
 from datetime import date, datetime, timedelta
+from typing import Any
 
 from mcp.server.mcpserver import MCPServer
 from sqlalchemy import String, cast, func, or_
@@ -15,6 +16,7 @@ from app.task_graph import (
     format_predecessor_ids,
     parse_predecessor_ids,
     strip_predecessor_references,
+    strip_predecessor_references_many,
     validate_predecessors,
 )
 
@@ -25,6 +27,9 @@ _db_session: ContextVar[Session | None] = ContextVar("repka_db_session", default
 _TITLE_MAX = 80
 _DESCRIPTION_MAX = 500
 _ASSIGNEE_MAX = 60
+_SEARCH_DEFAULT_LIMIT = 50
+_SEARCH_MAX_LIMIT = 250
+_BULK_MAX_IDS = 250
 
 
 def set_tool_db(db: Session):
@@ -95,6 +100,22 @@ def _optional_date(value: str | None, field: str) -> date | None:
         raise ValueError(
             f"Invalid {field} '{value}'. Use format dd.mm.yy (e.g. 05.08.26)."
         ) from exc
+
+
+def _coerce_bool(value: Any, field: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, (int, float)) and value in (0, 1):
+        return bool(value)
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "1", "yes", "y"}:
+            return True
+        if lowered in {"false", "0", "no", "n", ""}:
+            return False
+    raise ValueError(f"{field} must be a boolean")
 
 
 def _inclusive_finish_expr():
@@ -175,6 +196,192 @@ def _apply_task_filters(
     return query
 
 
+def _validate_date_filter_combos(
+    *,
+    on_date: date | None,
+    active_from: date | None,
+    active_to: date | None,
+    starts_from: date | None = None,
+    starts_to: date | None = None,
+    ends_from: date | None = None,
+    ends_to: date | None = None,
+) -> None:
+    if on_date is not None and (active_from is not None or active_to is not None):
+        raise ValueError("Pass either on_date or active_from/active_to, not both")
+    if (active_from is None) ^ (active_to is None):
+        raise ValueError("active_from and active_to must be passed together")
+    if (
+        active_from is not None
+        and active_to is not None
+        and active_from > active_to
+    ):
+        raise ValueError("active_from must be <= active_to")
+    if (
+        starts_from is not None
+        and starts_to is not None
+        and starts_from > starts_to
+    ):
+        raise ValueError("starts_from must be <= starts_to")
+    if ends_from is not None and ends_to is not None and ends_from > ends_to:
+        raise ValueError("ends_from must be <= ends_to")
+
+
+def _parse_common_filters(
+    *,
+    query: str | None = None,
+    assignee: str | None = None,
+    priority: str | None = None,
+    on_date: str | None = None,
+    active_from: str | None = None,
+    active_to: str | None = None,
+    starts_from: str | None = None,
+    starts_to: str | None = None,
+    ends_from: str | None = None,
+    ends_to: str | None = None,
+) -> dict[str, Any]:
+    parsed_on_date = _optional_date(on_date, "on_date")
+    parsed_active_from = _optional_date(active_from, "active_from")
+    parsed_active_to = _optional_date(active_to, "active_to")
+    parsed_starts_from = _optional_date(starts_from, "starts_from")
+    parsed_starts_to = _optional_date(starts_to, "starts_to")
+    parsed_ends_from = _optional_date(ends_from, "ends_from")
+    parsed_ends_to = _optional_date(ends_to, "ends_to")
+    _validate_date_filter_combos(
+        on_date=parsed_on_date,
+        active_from=parsed_active_from,
+        active_to=parsed_active_to,
+        starts_from=parsed_starts_from,
+        starts_to=parsed_starts_to,
+        ends_from=parsed_ends_from,
+        ends_to=parsed_ends_to,
+    )
+    return {
+        "assignee": assignee,
+        "priority": priority,
+        "text_query": query,
+        "on_date": parsed_on_date,
+        "active_from": parsed_active_from,
+        "active_to": parsed_active_to,
+        "start_from": parsed_starts_from,
+        "start_to": parsed_starts_to,
+        "finish_from": parsed_ends_from,
+        "finish_to": parsed_ends_to,
+    }
+
+
+def _query_filtered_tasks(**filter_kwargs: Any):
+    return _apply_task_filters(_db().query(Task), **filter_kwargs)
+
+
+def _require_filter_scope(filter_kwargs: dict[str, Any]) -> None:
+    """Refuse unscoped where-mutations (would match the whole project)."""
+    scoped = any(
+        filter_kwargs.get(key) is not None
+        for key in (
+            "assignee",
+            "priority",
+            "text_query",
+            "on_date",
+            "active_from",
+            "active_to",
+            "start_from",
+            "start_to",
+            "finish_from",
+            "finish_to",
+        )
+    )
+    if not scoped:
+        raise ValueError(
+            "Refusing unscoped mutation: pass at least one filter "
+            "(assignee, priority, query, or dates). "
+            "To wipe the whole project use clear_entire_project(confirm=true)."
+        )
+
+
+def _filter_bits(filter_kwargs: dict[str, Any]) -> list[str]:
+    bits: list[str] = []
+    if _optional_str(filter_kwargs.get("assignee")):
+        bits.append(f"assignee~{_optional_str(filter_kwargs.get('assignee'))}")
+    if _optional_str(filter_kwargs.get("priority")):
+        bits.append(
+            f"priority={normalize_priority(filter_kwargs['priority'])}"
+        )
+    if _optional_str(filter_kwargs.get("text_query")):
+        bits.append(f"query~{_optional_str(filter_kwargs.get('text_query'))}")
+    on_date = filter_kwargs.get("on_date")
+    if on_date is not None:
+        bits.append(f"on_date={format_date_ddmmyy(on_date)}")
+    active_from = filter_kwargs.get("active_from")
+    active_to = filter_kwargs.get("active_to")
+    if active_from is not None and active_to is not None:
+        bits.append(
+            f"active={format_date_ddmmyy(active_from)}…{format_date_ddmmyy(active_to)}"
+        )
+    start_from = filter_kwargs.get("start_from")
+    start_to = filter_kwargs.get("start_to")
+    if start_from is not None or start_to is not None:
+        bits.append(
+            f"starts={format_date_ddmmyy(start_from) if start_from else '…'}"
+            f"…{format_date_ddmmyy(start_to) if start_to else '…'}"
+        )
+    finish_from = filter_kwargs.get("finish_from")
+    finish_to = filter_kwargs.get("finish_to")
+    if finish_from is not None or finish_to is not None:
+        bits.append(
+            f"ends={format_date_ddmmyy(finish_from) if finish_from else '…'}"
+            f"…{format_date_ddmmyy(finish_to) if finish_to else '…'}"
+        )
+    return bits
+
+
+def _resolve_schedule(
+    task: Task,
+    *,
+    new_start_date: str | None = None,
+    new_end_date: str | None = None,
+    duration: int | None = None,
+) -> tuple[date, int, str]:
+    """Resolve start/duration from optional fields. Returns (start, duration, mode)."""
+    start = _optional_date(new_start_date, "new_start_date")
+    end = _optional_date(new_end_date, "new_end_date")
+
+    if start is None and end is None and duration is None:
+        raise ValueError(
+            "Provide new_start_date and/or new_end_date "
+            "(optionally duration with start or end)."
+        )
+    if duration is not None and duration < 1:
+        raise ValueError("duration must be >= 1")
+
+    if start is not None and end is not None:
+        if duration is not None:
+            raise ValueError(
+                "Pass either new_end_date or duration with new_start_date, not both"
+            )
+        if end < start:
+            raise ValueError("new_end_date must be >= new_start_date")
+        return start, (end - start).days + 1, "start+end"
+
+    if start is not None and duration is not None:
+        return start, duration, "start+duration"
+
+    if start is not None:
+        return start, max(task.duration, 1), "start_only"
+
+    if end is not None and duration is not None:
+        return end - timedelta(days=duration - 1), duration, "end+duration"
+
+    if end is not None:
+        dur = max(task.duration, 1)
+        return end - timedelta(days=dur - 1), dur, "end_only"
+
+    raise ValueError("duration alone: use update_task_duration")
+
+
+def _shift_task(task: Task, offset_days: int) -> None:
+    task.start_date = task.start_date + timedelta(days=offset_days)
+
+
 @mcp.tool()
 def get_project_summary(
     assignee: str | None = None,
@@ -196,39 +403,30 @@ def get_project_summary(
 
     For time-scoped counts always pass date bounds.
     """
-    parsed_on_date = _optional_date(on_date, "on_date")
-    parsed_active_from = _optional_date(active_from, "active_from")
-    parsed_active_to = _optional_date(active_to, "active_to")
-
-    if parsed_on_date is not None and (
-        parsed_active_from is not None or parsed_active_to is not None
-    ):
-        raise ValueError("Pass either on_date or active_from/active_to, not both")
-    if (parsed_active_from is None) ^ (parsed_active_to is None):
-        raise ValueError("active_from and active_to must be passed together")
-    if (
-        parsed_active_from is not None
-        and parsed_active_to is not None
-        and parsed_active_from > parsed_active_to
-    ):
-        raise ValueError("active_from must be <= active_to")
-
-    filter_kwargs: dict = {
-        "assignee": assignee,
-        "priority": priority,
-        "on_date": parsed_on_date,
-        "active_from": parsed_active_from,
-        "active_to": parsed_active_to,
+    filter_kwargs = _parse_common_filters(
+        assignee=assignee,
+        priority=priority,
+        on_date=on_date,
+        active_from=active_from,
+        active_to=active_to,
+    )
+    # summary ignores text/starts/ends — drop unused keys for clarity
+    summary_filters = {
+        "assignee": filter_kwargs["assignee"],
+        "priority": filter_kwargs["priority"],
+        "on_date": filter_kwargs["on_date"],
+        "active_from": filter_kwargs["active_from"],
+        "active_to": filter_kwargs["active_to"],
     }
 
     db = _db()
-    base = _apply_task_filters(db.query(Task), **filter_kwargs)
+    base = _apply_task_filters(db.query(Task), **summary_filters)
     total = base.count()
 
     by_assignee_rows = (
         _apply_task_filters(
             db.query(Task.assignee, func.count(Task.id)),
-            **filter_kwargs,
+            **summary_filters,
         )
         .group_by(Task.assignee)
         .order_by(func.count(Task.id).desc())
@@ -237,7 +435,7 @@ def get_project_summary(
     by_priority_rows = (
         _apply_task_filters(
             db.query(Task.priority, func.count(Task.id)),
-            **filter_kwargs,
+            **summary_filters,
         )
         .group_by(Task.priority)
         .order_by(func.count(Task.id).desc())
@@ -245,19 +443,9 @@ def get_project_summary(
     )
 
     lines = [f"total_tasks: {total}"]
-    filter_bits: list[str] = []
-    if _optional_str(assignee):
-        filter_bits.append(f"assignee~{_optional_str(assignee)}")
-    if _optional_str(priority):
-        filter_bits.append(f"priority={normalize_priority(priority)}")
-    if parsed_on_date is not None:
-        filter_bits.append(f"on_date={format_date_ddmmyy(parsed_on_date)}")
-    if parsed_active_from is not None and parsed_active_to is not None:
-        filter_bits.append(
-            f"active={format_date_ddmmyy(parsed_active_from)}…{format_date_ddmmyy(parsed_active_to)}"
-        )
-    if filter_bits:
-        lines.append(f"filters: {', '.join(filter_bits)}")
+    bits = _filter_bits(summary_filters)
+    if bits:
+        lines.append(f"filters: {', '.join(bits)}")
 
     lines.append("by_assignee:")
     if not by_assignee_rows:
@@ -288,84 +476,51 @@ def search_tasks(
     starts_to: str | None = None,
     ends_from: str | None = None,
     ends_to: str | None = None,
-    limit: int = 10,
+    limit: int = _SEARCH_DEFAULT_LIMIT,
+    ids_only: bool = False,
 ) -> str:
-    """Return a list of matching tasks (id, title, assignee, dates). Use for «какие / перечисли / покажи».
+    """Return matching tasks. Use for «какие / перечисли / покажи» and to collect IDs for bulk_*.
 
     Not for bare counts — use get_project_summary for «сколько».
+    Default limit 50, max 250. For bulk prep set ids_only=true (compact id list).
 
     Date modes (dd.mm.yy; do not mix ACTIVE with STARTS/ENDS unless intentional):
 
-    1) ACTIVE (interval intersection) — «какие задачи на сегодня / на этой неделе / попадают на неделю»:
-       - on_date: Start ≤ date ≤ Finish (Finish = start + duration − 1)
-       - active_from + active_to: Start ≤ active_to AND Finish ≥ active_from
-         (overlaps the period even if started earlier). For this week raise limit (e.g. 50).
-
-    2) STARTS — «какие начинаются / стартуют …»:
-       - starts_from / starts_to: filter by start_date only
-
-    3) ENDS — «какие заканчиваются / финишируют …»:
-       - ends_from / ends_to: filter by inclusive Finish only
+    1) ACTIVE (interval intersection) — «какие задачи на сегодня / на этой неделе»:
+       - on_date / active_from+active_to
+    2) STARTS — starts_from / starts_to
+    3) ENDS — ends_from / ends_to
     """
     if limit < 1:
         raise ValueError("limit must be >= 1")
-    if limit > 50:
-        limit = 50
+    if limit > _SEARCH_MAX_LIMIT:
+        limit = _SEARCH_MAX_LIMIT
+    want_ids_only = _coerce_bool(ids_only, "ids_only")
 
-    parsed_on_date = _optional_date(on_date, "on_date")
-    parsed_active_from = _optional_date(active_from, "active_from")
-    parsed_active_to = _optional_date(active_to, "active_to")
-    parsed_starts_from = _optional_date(starts_from, "starts_from")
-    parsed_starts_to = _optional_date(starts_to, "starts_to")
-    parsed_ends_from = _optional_date(ends_from, "ends_from")
-    parsed_ends_to = _optional_date(ends_to, "ends_to")
-
-    if parsed_on_date is not None and (
-        parsed_active_from is not None or parsed_active_to is not None
-    ):
-        raise ValueError("Pass either on_date or active_from/active_to, not both")
-    if (parsed_active_from is None) ^ (parsed_active_to is None):
-        raise ValueError("active_from and active_to must be passed together")
-    if (
-        parsed_active_from is not None
-        and parsed_active_to is not None
-        and parsed_active_from > parsed_active_to
-    ):
-        raise ValueError("active_from must be <= active_to")
-    if (
-        parsed_starts_from is not None
-        and parsed_starts_to is not None
-        and parsed_starts_from > parsed_starts_to
-    ):
-        raise ValueError("starts_from must be <= starts_to")
-    if (
-        parsed_ends_from is not None
-        and parsed_ends_to is not None
-        and parsed_ends_from > parsed_ends_to
-    ):
-        raise ValueError("ends_from must be <= ends_to")
-
-    db = _db()
-    q = _apply_task_filters(
-        db.query(Task),
+    filter_kwargs = _parse_common_filters(
+        query=query,
         assignee=assignee,
         priority=priority,
-        text_query=query,
-        on_date=parsed_on_date,
-        active_from=parsed_active_from,
-        active_to=parsed_active_to,
-        start_from=parsed_starts_from,
-        start_to=parsed_starts_to,
-        finish_from=parsed_ends_from,
-        finish_to=parsed_ends_to,
+        on_date=on_date,
+        active_from=active_from,
+        active_to=active_to,
+        starts_from=starts_from,
+        starts_to=starts_to,
+        ends_from=ends_from,
+        ends_to=ends_to,
     )
+    q = _query_filtered_tasks(**filter_kwargs)
     total = q.count()
     rows = q.order_by(Task.id).limit(limit).all()
 
     if not rows:
         return "No tasks matched the filters."
 
-    lines = [f"matched: {total} (showing {len(rows)})"]
+    header = f"matched: {total} (showing {len(rows)})"
+    if want_ids_only:
+        return f"{header} ids_only\nids: {','.join(str(t.id) for t in rows)}"
+
+    lines = [header]
     for task in rows:
         finish = _task_finish_date(task)
         lines.append(
@@ -377,21 +532,39 @@ def search_tasks(
 
 
 @mcp.tool()
-def move_task(task_id: int, new_start_date: str) -> str:
-    """Move a task to a new start date. Date must be dd.mm.yy (e.g. 05.08.26)."""
+def move_task(
+    task_id: int,
+    new_start_date: str | None = None,
+    new_end_date: str | None = None,
+    duration: int | None = None,
+) -> str:
+    """Reschedule one task. Dates dd.mm.yy. Modes:
+    - new_start_date only → keep duration
+    - new_start_date + new_end_date → recompute duration (inclusive)
+    - new_end_date only → keep duration, shift start
+    - new_start_date + duration → set both
+    """
     task = _get_task(task_id)
-    parsed = _parse_date(new_start_date)
-    old = format_date_ddmmyy(task.start_date)
-    task.start_date = parsed
+    old_start = format_date_ddmmyy(task.start_date)
+    old_end = format_date_ddmmyy(_task_finish_date(task))
+    old_duration = task.duration
+
+    start, new_duration, mode = _resolve_schedule(
+        task,
+        new_start_date=new_start_date,
+        new_end_date=new_end_date,
+        duration=duration,
+    )
+    task.start_date = start
+    task.duration = new_duration
     _db().commit()
     _db().refresh(task)
+    new_end = format_date_ddmmyy(_task_finish_date(task))
     return (
-        f"Moved task #{task.id} «{task.title}» "
-        f"from {old} to {format_date_ddmmyy(task.start_date)}."
+        f"Moved task #{task.id} «{task.title}» ({mode}): "
+        f"{old_start}→{old_end} ({old_duration}d) → "
+        f"{format_date_ddmmyy(task.start_date)}→{new_end} ({task.duration}d)."
     )
-
-
-_BULK_MAX_IDS = 100
 
 
 def _normalize_task_ids(task_ids: list[int]) -> list[int]:
@@ -422,7 +595,9 @@ def _load_tasks_for_bulk(task_ids: list[int]) -> tuple[list[Task], list[int]]:
 
 @mcp.tool()
 def bulk_move_tasks(task_ids: list[int], new_start_date: str) -> str:
-    """Move many tasks to the same start date in one call (dd.mm.yy). Prefer this over repeated move_task."""
+    """Move many tasks to the same start date in one call (dd.mm.yy). Prefer this over repeated move_task.
+    For relative shifts use shift_tasks; for filter-based absolute move use move_tasks_where.
+    """
     parsed = _parse_date(new_start_date)
     tasks, missing = _load_tasks_for_bulk(task_ids)
     if not tasks and missing:
@@ -437,6 +612,33 @@ def bulk_move_tasks(task_ids: list[int], new_start_date: str) -> str:
     ]
     for task in tasks:
         lines.append(f"  #{task.id} «{task.title}»")
+    if missing:
+        lines.append(f"missing ids (skipped): {missing}")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def shift_tasks(task_ids: list[int], offset_days: int) -> str:
+    """Shift start dates of many tasks by offset_days (e.g. +3 or -5). Duration unchanged."""
+    if not isinstance(offset_days, int):
+        offset_days = int(offset_days)
+    if offset_days == 0:
+        raise ValueError("offset_days must be non-zero")
+
+    tasks, missing = _load_tasks_for_bulk(task_ids)
+    if not tasks and missing:
+        raise ValueError(f"No tasks found for ids: {missing}")
+
+    for task in tasks:
+        _shift_task(task, offset_days)
+    _db().commit()
+
+    sign = "+" if offset_days > 0 else ""
+    lines = [f"Shifted {len(tasks)} task(s) by {sign}{offset_days} day(s):"]
+    for task in tasks:
+        lines.append(
+            f"  #{task.id} «{task.title}» → {format_date_ddmmyy(task.start_date)}"
+        )
     if missing:
         lines.append(f"missing ids (skipped): {missing}")
     return "\n".join(lines)
@@ -465,15 +667,16 @@ def bulk_assign_tasks(task_ids: list[int], new_assignee: str) -> str:
 
 @mcp.tool()
 def bulk_delete_tasks(task_ids: list[int]) -> str:
-    """Delete many tasks in one call and clean predecessor references. Prefer over repeated delete_task."""
+    """Delete many tasks in one call and clean predecessor references. Prefer over repeated delete_task.
+    To delete by filters use delete_tasks_where; to wipe all tasks use clear_entire_project(confirm=true).
+    """
     tasks, missing = _load_tasks_for_bulk(task_ids)
     if not tasks and missing:
         raise ValueError(f"No tasks found for ids: {missing}")
 
     db = _db()
     deleted: list[tuple[int, str]] = [(t.id, t.title) for t in tasks]
-    for task_id, _title in deleted:
-        strip_predecessor_references(db, task_id)
+    strip_predecessor_references_many(db, {tid for tid, _ in deleted})
     for task in tasks:
         db.delete(task)
     db.commit()
@@ -484,6 +687,180 @@ def bulk_delete_tasks(task_ids: list[int]) -> str:
     if missing:
         lines.append(f"missing ids (skipped): {missing}")
     return "\n".join(lines)
+
+
+@mcp.tool()
+def move_tasks_where(
+    new_start_date: str,
+    query: str | None = None,
+    assignee: str | None = None,
+    priority: str | None = None,
+    on_date: str | None = None,
+    active_from: str | None = None,
+    active_to: str | None = None,
+    starts_from: str | None = None,
+    starts_to: str | None = None,
+    ends_from: str | None = None,
+    ends_to: str | None = None,
+) -> str:
+    """Move ALL tasks matching filters to new_start_date (dd.mm.yy). No search pagination.
+    At least one filter required. Prefer over search+bulk_move for large sets.
+    """
+    parsed = _parse_date(new_start_date)
+    filter_kwargs = _parse_common_filters(
+        query=query,
+        assignee=assignee,
+        priority=priority,
+        on_date=on_date,
+        active_from=active_from,
+        active_to=active_to,
+        starts_from=starts_from,
+        starts_to=starts_to,
+        ends_from=ends_from,
+        ends_to=ends_to,
+    )
+    _require_filter_scope(filter_kwargs)
+    tasks = _query_filtered_tasks(**filter_kwargs).order_by(Task.id).all()
+    if not tasks:
+        return "No tasks matched the filters."
+
+    for task in tasks:
+        task.start_date = parsed
+    _db().commit()
+
+    bits = _filter_bits(filter_kwargs)
+    lines = [
+        f"Moved {len(tasks)} task(s) matching [{', '.join(bits)}] "
+        f"to {format_date_ddmmyy(parsed)}:"
+    ]
+    for task in tasks[:30]:
+        lines.append(f"  #{task.id} «{task.title}»")
+    if len(tasks) > 30:
+        lines.append(f"  … and {len(tasks) - 30} more")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def shift_tasks_where(
+    offset_days: int,
+    query: str | None = None,
+    assignee: str | None = None,
+    priority: str | None = None,
+    on_date: str | None = None,
+    active_from: str | None = None,
+    active_to: str | None = None,
+    starts_from: str | None = None,
+    starts_to: str | None = None,
+    ends_from: str | None = None,
+    ends_to: str | None = None,
+) -> str:
+    """Shift ALL matching tasks by offset_days (+/−). No search pagination. At least one filter required."""
+    if not isinstance(offset_days, int):
+        offset_days = int(offset_days)
+    if offset_days == 0:
+        raise ValueError("offset_days must be non-zero")
+
+    filter_kwargs = _parse_common_filters(
+        query=query,
+        assignee=assignee,
+        priority=priority,
+        on_date=on_date,
+        active_from=active_from,
+        active_to=active_to,
+        starts_from=starts_from,
+        starts_to=starts_to,
+        ends_from=ends_from,
+        ends_to=ends_to,
+    )
+    _require_filter_scope(filter_kwargs)
+    tasks = _query_filtered_tasks(**filter_kwargs).order_by(Task.id).all()
+    if not tasks:
+        return "No tasks matched the filters."
+
+    for task in tasks:
+        _shift_task(task, offset_days)
+    _db().commit()
+
+    sign = "+" if offset_days > 0 else ""
+    bits = _filter_bits(filter_kwargs)
+    lines = [
+        f"Shifted {len(tasks)} task(s) matching [{', '.join(bits)}] "
+        f"by {sign}{offset_days} day(s):"
+    ]
+    for task in tasks[:30]:
+        lines.append(
+            f"  #{task.id} «{task.title}» → {format_date_ddmmyy(task.start_date)}"
+        )
+    if len(tasks) > 30:
+        lines.append(f"  … and {len(tasks) - 30} more")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def delete_tasks_where(
+    query: str | None = None,
+    assignee: str | None = None,
+    priority: str | None = None,
+    on_date: str | None = None,
+    active_from: str | None = None,
+    active_to: str | None = None,
+    starts_from: str | None = None,
+    starts_to: str | None = None,
+    ends_from: str | None = None,
+    ends_to: str | None = None,
+) -> str:
+    """Delete ALL tasks matching filters + clean predecessor refs. No search pagination.
+    At least one filter required. To wipe everything use clear_entire_project(confirm=true).
+    """
+    filter_kwargs = _parse_common_filters(
+        query=query,
+        assignee=assignee,
+        priority=priority,
+        on_date=on_date,
+        active_from=active_from,
+        active_to=active_to,
+        starts_from=starts_from,
+        starts_to=starts_to,
+        ends_from=ends_from,
+        ends_to=ends_to,
+    )
+    _require_filter_scope(filter_kwargs)
+    db = _db()
+    tasks = _query_filtered_tasks(**filter_kwargs).order_by(Task.id).all()
+    if not tasks:
+        return "No tasks matched the filters."
+
+    deleted: list[tuple[int, str]] = [(t.id, t.title) for t in tasks]
+    strip_predecessor_references_many(db, {tid for tid, _ in deleted})
+    for task in tasks:
+        db.delete(task)
+    db.commit()
+
+    bits = _filter_bits(filter_kwargs)
+    lines = [
+        f"Deleted {len(deleted)} task(s) matching [{', '.join(bits)}]:"
+    ]
+    for task_id, title in deleted[:30]:
+        lines.append(f"  #{task_id} «{title}»")
+    if len(deleted) > 30:
+        lines.append(f"  … and {len(deleted) - 30} more")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def clear_entire_project(confirm: bool = False) -> str:
+    """Delete ALL tasks in the project (full wipe). Requires confirm=true.
+    Prefer this over search+bulk_delete when the user asks to clear the whole plan.
+    """
+    if not _coerce_bool(confirm, "confirm"):
+        raise ValueError(
+            "Refusing to clear project: pass confirm=true to delete ALL tasks."
+        )
+    db = _db()
+    count = db.query(Task).count()
+    db.query(Task).delete()
+    db.commit()
+    return f"Cleared entire project: deleted {count} task(s)."
 
 
 @mcp.tool()

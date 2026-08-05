@@ -1,15 +1,44 @@
 from collections.abc import Generator
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
+from sqlalchemy.pool import NullPool
 
 from app.config import get_settings
 
 settings = get_settings()
 
-connect_args = {"check_same_thread": False} if settings.database_url.startswith("sqlite") else {}
+_is_sqlite = settings.database_url.startswith("sqlite")
 
-engine = create_engine(settings.database_url, connect_args=connect_args)
+# NullPool: no held connections across uvicorn --reload worker swaps (Windows).
+# timeout: fail busy SQLite locks instead of hanging forever when two workers overlap.
+_connect_args: dict = {}
+if _is_sqlite:
+    _connect_args = {
+        "check_same_thread": False,
+        "timeout": 15,
+    }
+
+_engine_kwargs: dict = {
+    "connect_args": _connect_args,
+}
+if _is_sqlite:
+    _engine_kwargs["poolclass"] = NullPool
+else:
+    _engine_kwargs["pool_pre_ping"] = True
+
+engine = create_engine(settings.database_url, **_engine_kwargs)
+
+if _is_sqlite:
+
+    @event.listens_for(engine, "connect")
+    def _sqlite_on_connect(dbapi_connection, _connection_record) -> None:  # noqa: ANN001
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA busy_timeout=15000")
+        cursor.close()
+
+
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
@@ -25,9 +54,20 @@ def get_db() -> Generator[Session, None, None]:
         db.close()
 
 
+def init_db() -> None:
+    """Create tables and apply lightweight SQLite migrations."""
+    Base.metadata.create_all(bind=engine)
+    ensure_sqlite_columns()
+
+
+def dispose_engine() -> None:
+    """Release all pooled / checked-out connections (safe with NullPool too)."""
+    engine.dispose()
+
+
 def ensure_sqlite_columns() -> None:
     """Add columns introduced after initial MVP create_all (SQLite only)."""
-    if not settings.database_url.startswith("sqlite"):
+    if not _is_sqlite:
         return
 
     with engine.begin() as conn:

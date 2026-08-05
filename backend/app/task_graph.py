@@ -112,13 +112,20 @@ def validate_predecessors(
 
 def strip_predecessor_references(db: Session, deleted_id: int) -> int:
     """Remove deleted_id from all tasks' predecessors. Returns affected count."""
+    return strip_predecessor_references_many(db, {deleted_id})
+
+
+def strip_predecessor_references_many(db: Session, deleted_ids: set[int]) -> int:
+    """Remove any of deleted_ids from all tasks' predecessors. Returns affected count."""
+    if not deleted_ids:
+        return 0
     updated = 0
     for task in db.query(Task).all():
         ids = parse_predecessor_ids(task.predecessors)
-        if deleted_id not in ids:
+        if not any(i in deleted_ids for i in ids):
             continue
         task.predecessors = format_predecessor_ids(
-            [i for i in ids if i != deleted_id]
+            [i for i in ids if i not in deleted_ids]
         )
         updated += 1
     return updated

@@ -9,6 +9,7 @@ AI-native планировщик с диаграммой Ганта: Excel-им�
 | | |
 | --- | --- |
 | **Репозиторий** | [github.com/komrade2801/Repka](https://github.com/komrade2801/Repka) |
+| **Демо-видео** | [YouTube](https://youtu.be/wllOO0AkVI4) — Excel → чат → Гантт → экспорт |
 | **Sample Excel** | [`samples/demo-tasks.xlsx`](samples/demo-tasks.xlsx) (~250 задач) |
 
 На Render Free первый запрос после простоя может занять ~30–60 с (cold start). Чат ждёт ответ LLM до ~120 с. Проверка API: `GET /health`, Swagger `/docs`.
@@ -42,7 +43,9 @@ python -m venv .venv
 # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 # Корневой .env — см. .env.example (OPENROUTER_API_KEY обязателен для чата)
-uvicorn app.main:app --reload --port 8000
+python run_dev.py
+# (подхватит backend/venv; освободит зависший :8000; graceful shutdown 5с)
+# явно: .\venv\Scripts\python.exe run_dev.py
 # опционально: python seed.py
 
 # Frontend (из /frontend)
