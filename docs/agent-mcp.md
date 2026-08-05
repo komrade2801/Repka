@@ -33,10 +33,10 @@ Tools вызываются **in-process** (та же SQLAlchemy-сессия, ч
 2. History: только `user` / `assistant` с клиента; перед каждым LLM-вызовом tool stripping (`KEEP_TOOL_RESULT_ROUNDS = 2`).
 3. Grounding: перед мутациями — свежий search/summary. **Список** («какие задачи…») → только `search_tasks`; **счёт** («сколько…») → `get_project_summary`. На неделе/сегодня: ACTIVE `active_from`+`active_to` / `on_date`; «начинаются» → `starts_*`; «заканчиваются» → `ends_*`.
 4. До `MAX_TOOL_ROUNDS = 6`: completion → `mcp.call_tool` → role `tool`.
-5. Ответ: `(reply, tools_used)`.
+5. Ответ: `(reply, tools_used)`. На UI toast «План обновлён» фильтрует read-only (`search_tasks`, `get_project_summary`).
 
 Конфиг: `OPENROUTER_API_KEY`, `OPENROUTER_BASE_URL`, `OPENROUTER_MODEL` (дефолт `openai/gpt-4o-mini`). На Windows для МСК нужен `tzdata`.
 
 **Расширение:** новый `@mcp.tool()` в `mcp_tools.py` + строка в `SYSTEM_PROMPT`.
 
-См. также: [app](./app.md) · [backend](./backend.md) · [plan](../plan.md) (этапы 3, 7, 9).
+См. также: [app](./app.md) · [backend](./backend.md) · [plan](./plan.md) (этапы 3, 7, 9).

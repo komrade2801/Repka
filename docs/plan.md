@@ -88,7 +88,7 @@
 #### Решения (зафиксировано)
 
 - **API:** `POST /tasks`, `PATCH /tasks/{id}` (частичное обновление), `DELETE /tasks/{id}`. Полный `PUT` не используем.
-- **ID:** `int` PK + autoincrement при создании. *После MVP → UUID + (желательно) join-таблица зависимостей — см. ADR и `Roadmap-to-production.md`.*
+- **ID:** `int` PK + autoincrement при создании. *После MVP → UUID + (желательно) join-таблица зависимостей — см. ADR и `docs/Roadmap-to-production.md`.*
 - **Поля:** редактируются все, кроме `id` (и руками, и ботом — один контракт).
 - **Дубликаты `title`:** CRUD допускает; импорт Excel добавляет только уникальные относительно БД и файла.
 - **Зависимости (слой A):** на write — проверка существования predecessor, запрет self-ref, ацикличность; дубликаты в списке схлопывать. Даты **не** пересчитываем.
@@ -199,46 +199,25 @@
   - copy `app/` + `seed.py`;
   - `CMD` через uvicorn **без** `--reload`: `uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}` (Render передаёт `PORT`);
   - `HEALTHCHECK` на `GET /health`. Проверено: `docker build` + `GET /health` → `{"status":"ok"}`.
-- [ ] Документировать стратегию БД на Render:
-  - **демо-минимум:** SQLite + **Persistent Disk** (путь файла на диске, напр. `/data/repka.db` → `DATABASE_URL=sqlite:////data/repka.db`) **или** seed на каждый cold start без диска (данные эфемерны);
-  - **предпочтительно для сдачи:** managed Postgres (`DATABASE_URL=postgresql+psycopg://…`) — модели уже SQLAlchemy; `ensure_sqlite_columns` на PG не мешает (no-op / skip).
+- [x] Документировать стратегию БД на Render — в README / [Roadmap-to-production.md](./Roadmap-to-production.md):
+  - **демо-минимум:** SQLite + **Persistent Disk** или эфемерные данные без диска;
+  - **предпочтительно:** managed Postgres (`DATABASE_URL=postgresql+psycopg://…`).
 
 ##### Frontend — совместимость с Vercel
-- [ ] Сборка из `frontend/` (Root Directory = `frontend` в Vercel): `npm install` + `npm run build`, Output = `dist`.
-- [ ] Env на Vercel: `VITE_API_URL=https://<render-service>.onrender.com` (без trailing slash; подставляется на **build**-time).
-- [ ] Опционально `frontend/vercel.json`: SPA fallback не обязателен (нет client-router), можно пустой / не добавлять.
-- [ ] Прогнать локально `npm run build` — убедиться, что production-сборка зелёная до деплоя.
-- [ ] Таймаут чата: фронт уже 120 с; на Render Free cold start + LLM могут упираться в gateway — в README предупредить; при необходимости статус «Агент думает» (этап 8) или увеличить timeout сервиса.
+- [x] Сборка из `frontend/` (Root Directory = `frontend`): `npm run build` → `dist`.
+- [x] Env на Vercel: `VITE_API_URL=https://<your-service>.onrender.com`.
+- [x] Прод UI на Vercel (URL — вне репо / в сообщении к сдаче).
+- [ ] Таймаут чата / статус «Агент думает» (этап 8) при cold start Render.
 
 ##### Репозиторий / артефакты ТЗ (файлы в монорепе)
-- [ ] Sample Excel: `samples/demo-tasks.xlsx` уже есть; опционально добавить короткий `samples/demo-tasks-small.xlsx` (~10–15 строк) для видео и быстрой проверки.
-- [ ] `Roadmap-to-production.md` в корне: PostgreSQL, int→UUID, join `task_dependencies`, Auth, WebSockets, merge-импорт, слой B (FS auto-shift), риски (стоимость LLM, rate limit, отсутствие multi-tenant), порядок закрытия.
-- [ ] Расширить `README.md`:
-  - быстрый старт (local);
-  - архитектура + ключевые ADR (кратко + ссылки на `docs/`);
-  - **отдельный раздел: использование AI-ассистентов при разработке** (требование ТЗ);
-  - деплой: Render (backend) + Vercel (frontend), список env;
-  - ссылки на sample Excel, Roadmap, демо-видео.
-- [ ] Демо-видео / GIF: Excel → чат (мутация) → Гантт обновился → экспорт; положить в `docs/demo.gif` / `docs/demo.mp4` или ссылку в README.
-- [ ] Подтянуть устаревшие места в `docs/app.md` (snapshot задач в промпте уже убран) перед сдачей.
-
-#### B. Деплой (порядок действий на хостингах)
-
-##### Render (API)
-- [ ] New → Web Service → connect repo → Docker (`backend/Dockerfile`) **или** Native: root `backend`, build `pip install -r requirements.txt`, start `uvicorn app.main:app --host 0.0.0.0 --port $PORT`.
-- [ ] Env: `OPENROUTER_API_KEY`, `OPENROUTER_MODEL` (опц.), `CORS_ORIGINS=https://<vercel-app>.vercel.app`, `AUTO_SEED=true`, `DATABASE_URL` (disk/Postgres).
-- [ ] Persistent Disk (если SQLite) или Postgres addon; проверить `GET /health` → `{"status":"ok"}`.
-- [ ] После первого деплоя фронта — дописать точный Vercel origin в `CORS_ORIGINS` и redeploy API при необходимости.
-
-##### Vercel (SPA)
-- [ ] Import repo → Root Directory `frontend` → Framework Vite → Build `npm run build` → Output `dist`.
-- [ ] Env: `VITE_API_URL` = публичный URL Render; **Redeploy** после смены env (Vite inlines на build).
-- [ ] Проверка: открыть сайт → задачи на Ганте (seed) → Импорт / Чат / Экспорт / модалка.
+- [x] `docs/Roadmap-to-production.md`: PostgreSQL, int→UUID, join зависимостей, Auth, WebSockets, merge-импорт, слой B, риски, порядок закрытия.
+- [x] Расширить `README.md`: архитектура + ADR, AI-ассистенты, деплой, env, sample Excel (прямые URL деплоя не в репо).
+- [ ] Демо-видео / GIF: Excel → чат → Гантт → экспорт.
+- [x] Подтянуть устаревшие места в `docs/app.md` (snapshot в промпте убран; актуальный агент / деплой).
 
 #### C. Чеклист приёмки перед отправкой ТЗ
-- [ ] Прод-URL открывается без локального бэкенда; CORS ок; чат отвечает (ключ валиден).
 - [ ] Сценарий ТЗ на проде пройден вручную.
-- [ ] В репо: README (архитектура + AI-ассистенты) + Roadmap + sample Excel + демо + ссылки на git и deployed app.
+- [x] В репо: README (архитектура + AI-ассистенты) + Roadmap + sample Excel + ссылки на git и deployed app (демо-видео — отдельно).
 
 ---
 
@@ -249,4 +228,4 @@
 | 1–7 | **готово** (этап 7: слой B опционально — не делали) |
 | 8 | **частично** — priority / раскраска / навигация / исполнитель / поиск+сортировка есть; остаётся шапка, сплошной таймлайн, статус чата |
 | 9 | **частично** — P1+P2 готовы; остаётся P3 (автосдвиг / clear fields) |
-| 10 | **не начат** (кроме черновика README + sample Excel); блок A — подготовка монорепы перед Render/Vercel |
+| 10 | **почти** — Render + Vercel задеплоены; README / Roadmap / docs обновлены; остаётся демо-видео и финальная ручная приёмка |

@@ -18,7 +18,7 @@ API-сервис Repka на FastAPI: хранение задач, CRUD, append-�
 - Создаёт таблицы (`Base.metadata.create_all`)
 - Вызывает `ensure_sqlite_columns()` (добавление/миграция колонки `priority` на уже существующих SQLite)
 - `RateLimitMiddleware` — лимиты на mutate `/tasks*` и `/chat`
-- CORS из `settings.cors_origins` (dev: Vite на 5173)
+- CORS из `settings.cors_origins` (env `CORS_ORIGINS`; dev: Vite на 5173)
 - Роутеры: `tasks`, `chat`
 - `GET /health` → `{"status": "ok"}`
 
@@ -31,7 +31,7 @@ API-сервис Repka на FastAPI: хранение задач, CRUD, append-�
 | Поле | Env | Описание |
 | --- | --- | --- |
 | `database_url` | `DATABASE_URL` | По умолчанию `sqlite:///./repka.db` |
-| `cors_origins` | — | Список origin (в коде: localhost/127.0.0.1:5173) |
+| `cors_origins` | `CORS_ORIGINS` | Список origin. Dev-дефолт: localhost/127.0.0.1:5173. На Render задавать **JSON-массивом**, pydantic-settings для `list[str]` парсит env через `json.loads` |
 | `openrouter_api_key` | `OPENROUTER_API_KEY` | Без ключа `/chat` отвечает 503 |
 | `openrouter_base_url` | `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` |
 | `openrouter_model` | `OPENROUTER_MODEL` | `openai/gpt-4o-mini` |
@@ -217,13 +217,26 @@ uvicorn app.main:app --reload --port 8000
 
 Файл SQLite по умолчанию создаётся относительно cwd процесса (часто `backend/repka.db`).
 
+## Docker / Render
+
+`backend/Dockerfile` (`python:3.12-slim`):
+
+- `pip install -r requirements.txt` (`pywin32` только при `sys_platform == "win32"`);
+- copy `app/` + `seed.py`;
+- `CMD`: `uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}`;
+- `HEALTHCHECK` → `GET /health`.
+
+Нативный деплой Render: Root Directory `backend`, start та же команда uvicorn с `$PORT`.
+
+**БД на Render:** без Persistent Disk SQLite эфемерна между redeploy. Для устойчивости — диск (`sqlite:////data/repka.db`) или Postgres. Подробнее: [Roadmap to production](./Roadmap-to-production.md).
+
 ## Структура модулей
 
 ```
 backend/
 ├── app/
 │   ├── main.py         # app, middleware, /health, ensure_sqlite_columns
-│   ├── config.py       # Settings
+│   ├── config.py       # Settings (+ CORS_ORIGINS)
 │   ├── database.py     # engine, get_db, SQLite column migrate
 │   ├── models.py       # Task ORM + TaskPriority
 │   ├── schemas.py      # request/response DTO + normalize_priority
@@ -234,7 +247,9 @@ backend/
 │   └── routers/
 │       ├── tasks.py    # GET /, POST /, PATCH /{id}, DELETE /{id}, POST /import
 │       └── chat.py     # POST /chat
-├── seed.py             # демо-данные (~250 задач)
+├── Dockerfile
+├── seed.py
+├── scripts/            # verify_requirements.py (Linux check)
 └── requirements.txt
 ```
 
@@ -243,3 +258,4 @@ backend/
 - [Обзор приложения](./app.md)
 - [AI-агент и MCP Tools](./agent-mcp.md)
 - [Frontend](./frontend.md)
+- [Roadmap to production](./Roadmap-to-production.md)

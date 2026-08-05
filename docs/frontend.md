@@ -114,6 +114,7 @@ timeout: 10_000
 - Если замечаний нет — `onConfirm(valid)` и сохранение через `POST /tasks/import` (append)
 - Если есть ошибки или дубликаты **внутри файла** — **импорт не выполняется**, toast (`sonner`) со статистикой и примерами строк
 - На сервере дубликаты относительно уже существующих задач **пропускаются** (`skipped`), новые добавляются
+- Порядок столбцов **не важен** — маппинг по заголовкам (`mapHeaderToKey`)
 - Fatal-ошибки файла (нет листа, нет колонок, пустой файл) — toast + текст в модалке
 - Флаг `isUploading` от мутации родителя
 
@@ -213,8 +214,11 @@ Hover по бару / аватару — fixed tooltip: название, исп
 2. Отправка через `useMutation(sendChatMessage)` с `history` без ошибочных реплик.
 3. Ответ ассистента рендерится через `react-markdown` + `remark-gfm` (таблицы, списки); широкие блоки — с горизонтальным скроллом.
 4. `onSuccess` → `invalidateQueries(['tasks'])` — Гантт обновляется после MCP-мутаций.
-5. Спиннер (`Loader2`) на время запроса; ошибки — inline в ленте (`isError`).
-6. Панель скрывается через `setChatOpen(false)`; кнопка «Чат» в шапке возвращает её.
+5. Toast `План обновлён (…)` — только если в `tools_used` есть **мутирующие** tools (исключены `search_tasks`, `get_project_summary`).
+6. Спиннер (`Loader2`) на время запроса; ошибки — inline в ленте (`isError`) + toast.
+7. Панель скрывается через `setChatOpen(false)`; кнопка «Чат» в шапке возвращает её.
+
+Таймаут чата: **120 с** (`api/chat.ts`) — учитывает cold start Render + LLM.
 
 ## Модалка задачи
 
@@ -258,7 +262,7 @@ shadcn-компоненты в `components/ui/` (`button`, `card`, `dialog`, `in
 | --- | --- |
 | `VITE_API_URL` | Базовый URL бэкенда; иначе `http://127.0.0.1:8000` |
 
-Для Vercel (план этапа 6): задать URL задеплоенного API.
+Прод: `VITE_API_URL=https://<your-service>.onrender.com` (без trailing slash; **build**-time на Vercel). URL UI — вне этой документации.
 
 ## Запуск
 
@@ -270,13 +274,19 @@ npm run dev
 
 Нужен запущенный бэкенд на порту 8000 (или корректный `VITE_API_URL`) и `OPENROUTER_API_KEY` для чата. Для демо без Excel: `python seed.py` из `backend/`.
 
+## Деплой (Vercel)
+
+- Root Directory: `frontend`
+- Build: `npm run build` → Output `dist`
+- Env: `VITE_API_URL` → URL Render API; после смены env — Redeploy
+
 ## Планируемое (этап 8+)
 
-- Enterprise UI polish, деплой Render / Vercel
-- `Roadmap-to-production.md` (UUID, PostgreSQL, Auth)
-- Опционально: слой B — автосдвиг дат при `add_dependency`
+- Enterprise UI polish (шапка, сплошной таймлайн, статус «Агент думает»)
+- Слой B — автосдвиг дат (см. [Roadmap to production](./Roadmap-to-production.md))
 
 ## Связанные документы
 
 - [Обзор приложения](./app.md)
 - [Backend](./backend.md)
+- [Roadmap to production](./Roadmap-to-production.md)
