@@ -27,6 +27,9 @@ function chatErrorMessage(error: unknown): string {
 
 const TASKS_KEY = ["tasks"] as const
 
+/** Read-only MCP tools — do not trigger «План обновлён» toast. */
+const READ_ONLY_TOOLS = new Set(["get_project_summary", "search_tasks"])
+
 const CHAT_PLACEHOLDER =
   "Например: создай задачу «Ревью», перенеси на понедельник, назначь Анне…"
 
@@ -167,8 +170,11 @@ export function ChatPanel({ className }: ChatPanelProps) {
         toolsUsed: data.tools_used,
       })
       void queryClient.invalidateQueries({ queryKey: TASKS_KEY })
-      if (data.tools_used?.length) {
-        toast.success(`План обновлён (${data.tools_used.join(", ")})`)
+      const mutatedTools = (data.tools_used ?? []).filter(
+        (name) => !READ_ONLY_TOOLS.has(name),
+      )
+      if (mutatedTools.length) {
+        toast.success(`План обновлён (${mutatedTools.join(", ")})`)
       }
     },
     onError: (error) => {
